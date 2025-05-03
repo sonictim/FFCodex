@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ChannelAssignment","MetadataBlockData","SampleSizeSpec","SubFrame"],"struct":["Constant","FixedLpc","Frame","FrameHeader","Lpc","MetadataBlock","QuantizedParameters","Residual","Stream","StreamInfo","Verbatim"],"trait":["BitRepr"]};

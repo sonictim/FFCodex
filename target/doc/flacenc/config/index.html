@@ -1,0 +1,36 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Encoder configuration structs."><title>flacenc::config - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-46132b98.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="flacenc" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0 (4d91de4e4 2025-02-17)" data-channel="1.85.0" data-search-js="search-75f5ac3e.js" data-settings-js="settings-0f613d39.js" ><script src="../../static.files/storage-59e33391.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../flacenc/index.html">flacenc</a><span class="version">0.4.0</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module config</a></h2><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#enums" title="Enums">Enums</a></li></ul></section><div id="rustdoc-modnav"><h2 class="in-crate"><a href="../index.html">In crate flacenc</a></h2></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><span class="rustdoc-breadcrumbs"><a href="../index.html">flacenc</a></span><h1>Module <span>config</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/flacenc/config.rs.html#15-601">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Encoder configuration structs.</p>
+<p>This module defines a deserializable config variables and those default
+values. Typically, the top-level variable <a href="struct.Encoder.html" title="struct flacenc::config::Encoder"><code>Encoder</code></a> is represented in
+a toml file like below:</p>
+<div class="example-wrap"><pre class="language-toml"><code>block_size = 4096
+multithread = true
+
+[stereo_coding]
+use_leftside = true
+use_rightside = true
+use_midside = true
+
+[subframe_coding]
+use_constant = true
+use_fixed = true
+use_lpc = true
+
+[subframe_coding.fixed]
+max_order = 4
+
+[subframe_coding.fixed.order_sel]
+type = &quot;ApproxEnt&quot;
+partitions = 32
+
+[subframe_coding.qlpc]
+lpc_order = 10
+quant_precision = 15
+use_direct_mse = false
+mae_optimization_steps = 0
+
+[subframe_coding.qlpc.window]
+type = &quot;Tukey&quot;
+alpha = 0.4
+
+[subframe_coding.prc]
+max_parameter = 14</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.Encoder.html" title="struct flacenc::config::Encoder">Encoder</a></div><div class="desc docblock-short">Configuration for encoder.</div></li><li><div class="item-name"><a class="struct" href="struct.Fixed.html" title="struct flacenc::config::Fixed">Fixed</a></div><div class="desc docblock-short">Configuration for fixed-parameter linear-predictive coding.</div></li><li><div class="item-name"><a class="struct" href="struct.Prc.html" title="struct flacenc::config::Prc">Prc</a></div><div class="desc docblock-short">Configuration for partitioned-rice coding (PRC).</div></li><li><div class="item-name"><a class="struct" href="struct.Qlpc.html" title="struct flacenc::config::Qlpc">Qlpc</a></div><div class="desc docblock-short">Configuration for quantized linear-predictive coding (QLPC).</div></li><li><div class="item-name"><a class="struct" href="struct.StereoCoding.html" title="struct flacenc::config::StereoCoding">Stereo<wbr>Coding</a></div><div class="desc docblock-short">Configuration for stereo coding algorithms.</div></li><li><div class="item-name"><a class="struct" href="struct.SubFrameCoding.html" title="struct flacenc::config::SubFrameCoding">SubFrame<wbr>Coding</a></div><div class="desc docblock-short">Configuration for sub-frame (individual channel) coding.</div></li></ul><h2 id="enums" class="section-header">Enums<a href="#enums" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="enum" href="enum.OrderSel.html" title="enum flacenc::config::OrderSel">Order<wbr>Sel</a></div><div class="desc docblock-short">Configuration for (LPC) order selection algorithms.</div></li><li><div class="item-name"><a class="enum" href="enum.Window.html" title="enum flacenc::config::Window">Window</a></div><div class="desc docblock-short">Analysis window descriptor.</div></li></ul></section></div></main></body></html>
