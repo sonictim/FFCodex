@@ -1,7 +1,6 @@
 use crate::prelude::*;
-use ::chromaprint::Chromaprint;
+use crate::chromaprint_bindings::{Chromaprint, CHROMAPRINT_ALGORITHM_DEFAULT};
 use base64::{Engine as _, engine::general_purpose};
-// use bit_set::BitSet;
 
 impl Codex {
     pub fn get_chromaprint_fingerprint(&mut self) -> R<String> {
@@ -37,22 +36,17 @@ impl Codex {
         };
 
         // Try Chromaprint fingerprinting
-        let mut c = Chromaprint::new();
+        let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT);
         if c.start(48000, num_channels) {
             c.feed(&samples);
             c.finish();
 
-            if let Some(fingerprint) = c.raw_fingerprint() {
-                // Convert Vec<i32> to bytes before encoding
-                let bytes: Vec<u8> = fingerprint.iter().flat_map(|&x| x.to_le_bytes()).collect();
-                let encoded = general_purpose::STANDARD.encode(&bytes);
-                if !encoded.is_empty() {
-                    println!(
-                        "Success! Generated Chromaprint fingerprint for: {}",
-                        self.get_filename()
-                    );
-                    return Ok(encoded);
-                }
+            if let Some(fingerprint) = c.get_fingerprint() {
+                println!(
+                    "Success! Generated Chromaprint fingerprint for: {}",
+                    self.get_filename()
+                );
+                return Ok(fingerprint);
             }
         }
 
@@ -95,6 +89,7 @@ impl Codex {
     }
 }
 
+// Helper functions to convert audio data remain the same
 fn interleave_stereo(channels: &[Vec<f32>]) -> Vec<i16> {
     let left = &channels[0];
     let right = &channels[1];
@@ -110,7 +105,8 @@ fn interleave_stereo(channels: &[Vec<f32>]) -> Vec<i16> {
         .for_each(|(&l, &r)| {
             let l_sample = (l.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
             let r_sample = (r.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-            interleaved.extend_from_slice(&[l_sample, r_sample]);
+            interleaved.push(l_sample);
+            interleaved.push(r_sample);
         });
 
     interleaved

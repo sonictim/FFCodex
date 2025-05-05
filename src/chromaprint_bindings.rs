@@ -1,32 +1,38 @@
-use std::ffi::{c_char, c_int, c_void};
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
 
-pub fn get_v() -> String {
-    get_version()
-}
+use std::ffi::{c_char, c_int, c_short, c_void};
 
-#[link(name = "chromaprint", kind = "static")]
+pub type ChromaprintContext = *mut c_void;
+
+// Added 'unsafe' keyword here
 unsafe extern "C" {
+    pub fn chromaprint_new(algorithm: c_int) -> ChromaprintContext;
+    pub fn chromaprint_free(ctx: ChromaprintContext);
+    pub fn chromaprint_start(ctx: ChromaprintContext, sample_rate: c_int, num_channels: c_int) -> c_int;
+    pub fn chromaprint_feed(ctx: ChromaprintContext, data: *const c_short, size: c_int) -> c_int;
+    pub fn chromaprint_finish(ctx: ChromaprintContext) -> c_int;
+    pub fn chromaprint_get_fingerprint(ctx: ChromaprintContext, fingerprint: *mut *mut c_char) -> c_int;
+    pub fn chromaprint_get_raw_fingerprint(ctx: ChromaprintContext, fingerprint: *mut *mut c_void, size: *mut c_int) -> c_int;
+    pub fn chromaprint_encode_fingerprint(fp: *const c_void, size: c_int, algorithm: c_int, encoded_fp: *mut *mut c_char, encoded_size: *mut c_int, base64: c_int) -> c_int;
+    pub fn chromaprint_decode_fingerprint(encoded_fp: *const c_char, encoded_size: c_int, fp: *mut *mut c_void, size: *mut c_int, algorithm: *mut c_int, base64: c_int) -> c_int;
     pub fn chromaprint_get_version() -> *const c_char;
-
-    pub fn chromaprint_new(algorithm: c_int) -> *mut c_void;
-    pub fn chromaprint_free(ctx: *mut c_void);
-
-    pub fn chromaprint_start(ctx: *mut c_void, sample_rate: c_int, num_channels: c_int) -> c_int;
-    pub fn chromaprint_feed(ctx: *mut c_void, data: *const i16, size: c_int) -> c_int;
-    pub fn chromaprint_finish(ctx: *mut c_void) -> c_int;
-
-    pub fn chromaprint_get_fingerprint(ctx: *mut c_void, fingerprint: *mut *mut c_char) -> c_int;
-    pub fn chromaprint_dealloc(ptr: *mut c_void);
+    pub fn chromaprint_set_option(ctx: ChromaprintContext, name: *const c_char, value: c_int) -> c_int;
+    
+    // Moving the free function here so it's in the same unsafe extern block
+    fn free(ptr: *mut c_void);
 }
 
-pub const CHROMAPRINT_ALGORITHM_TEST1: c_int = 0;
-pub const CHROMAPRINT_ALGORITHM_TEST2: c_int = 1;
-pub const CHROMAPRINT_ALGORITHM_TEST3: c_int = 2;
-pub const CHROMAPRINT_ALGORITHM_DEFAULT: c_int = CHROMAPRINT_ALGORITHM_TEST2;
+// Constants
+pub const CHROMAPRINT_ALGORITHM_DEFAULT: c_int = 0;
+pub const CHROMAPRINT_ALGORITHM_TEST1: c_int = 1;
+pub const CHROMAPRINT_ALGORITHM_TEST2: c_int = 2;
+pub const CHROMAPRINT_ALGORITHM_TEST3: c_int = 3;
+pub const CHROMAPRINT_ALGORITHM_TEST4: c_int = 4;
 
 // Safe Rust wrapper for Chromaprint
 pub struct Chromaprint {
-    ctx: *mut c_void,
+    ctx: ChromaprintContext,
 }
 
 impl Chromaprint {
@@ -61,7 +67,8 @@ impl Chromaprint {
         if result == 1 && !fingerprint.is_null() {
             let c_str = unsafe { std::ffi::CStr::from_ptr(fingerprint) };
             let fingerprint_str = c_str.to_string_lossy().into_owned();
-            unsafe { chromaprint_dealloc(fingerprint as *mut c_void) };
+            // Use unsafe block around free call
+            unsafe { libc_free(fingerprint as *mut c_void) };
             Some(fingerprint_str)
         } else {
             None
@@ -83,4 +90,11 @@ pub fn get_version() -> String {
         let c_str = std::ffi::CStr::from_ptr(chromaprint_get_version());
         c_str.to_string_lossy().into_owned()
     }
+}
+
+// Wrapper to make it clear we're using libc free
+unsafe fn libc_free(ptr: *mut c_void) {
+    // In Rust 2024, unsafe operations inside unsafe functions
+    // still need to be wrapped in an unsafe block
+    unsafe { free(ptr) };
 }

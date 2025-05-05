@@ -4,7 +4,7 @@ use ffcodex_lib::*;
 
 fn main() -> R<()> {
     // Use the directly exported get_version function
-    let version = chromaprint_bindings::get_v();
+    let version = chromaprint_bindings::get_version();
     println!("Chromaprint version: {}", version);
     let input_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
 

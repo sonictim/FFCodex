@@ -1,2 +1,10 @@
 /target
 /vendor
+# Allow resources directory but exclude certain files
+# /resources
+*.o
+*.obj
+*.a
+*.dll
+*.so
+*.dylib
