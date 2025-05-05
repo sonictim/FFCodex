@@ -1,15 +1,22 @@
 pub use anyhow::{Result as R, anyhow};
+use claxon::input;
 use ffcodex_lib::*;
 
 fn main() -> R<()> {
-    // let input_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
+    // Use the directly exported get_version function
+    let version = chromaprint_bindings::get_v();
+    println!("Chromaprint version: {}", version);
+    let input_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
+
+    let fp = get_fingerprint(input_file)?;
+    println!("Fingerprint: {}", fp);
     // let output_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
 
     // flac_debug(input_file)?;
 
     let start_time = std::time::Instant::now();
 
-    clean_multi_mono("/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav")?;
+    clean_multi_mono("/Users/tfarrell/Desktop/CRWDChld_PlaygroundVocals01_TF_TJFR copy.flac")?;
 
     // let mut c = Codex::new(input_file);
     // c.convert_dual_mono()?;

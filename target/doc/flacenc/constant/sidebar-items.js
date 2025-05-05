@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_BLOCK_SIZE","MAX_BITS_PER_SAMPLE","MAX_BLOCK_SIZE","MAX_CHANNELS","MIN_BITS_PER_SAMPLE","MIN_BLOCK_SIZE"],"mod":["build_info","fixed","par","qlpc","rice"]};

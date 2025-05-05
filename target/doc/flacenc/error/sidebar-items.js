@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["EncodeError","OutputError","SourceErrorReason"],"struct":["RangeError","SourceError","Verified","VerifyError"],"trait":["Verify"]};

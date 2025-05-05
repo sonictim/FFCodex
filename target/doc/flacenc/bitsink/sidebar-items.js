@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"struct":["MemSink"],"trait":["BitSink","Bits","SignedBits"],"type":["ByteSink"]};

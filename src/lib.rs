@@ -1,8 +1,12 @@
 // pub mod decode;
 mod codecs;
+use std::path::PathBuf;
+
 use codecs::*;
 mod prelude;
 use crate::prelude::*;
+mod chromaprint;
+pub mod chromaprint_bindings;
 mod resample;
 
 // Standard bit depths
@@ -33,6 +37,11 @@ pub fn clean_multi_mono(path: &str) -> R<()> {
     Ok(())
 }
 
+pub fn get_fingerprint(path: &str) -> R<String> {
+    let mut c = Codex::new(path);
+    c.get_chromaprint_fingerprint()
+}
+
 #[derive(Debug)]
 pub enum Metadata {
     Wav(Vec<MetadataChunk>),
@@ -47,6 +56,7 @@ impl Default for Metadata {
 
 #[derive(Default)]
 pub struct Codex {
+    pub path: PathBuf,
     pub buffer: AudioBuffer,
     pub metadata: Metadata,
     pub codec: Option<Box<dyn Codec>>,
@@ -72,7 +82,15 @@ impl Codex {
         self.buffer = codec.decode(&mapped_file)?;
         self.metadata = codec.extract_metadata_from_file(input_file)?;
         self.codec = Some(codec);
+        self.path = PathBuf::from(input_file);
         Ok(())
+    }
+
+    pub fn get_filename(&self) -> &str {
+        self.path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown")
     }
 
     pub fn resample(&mut self, new_rate: u32) {
@@ -127,29 +145,7 @@ impl Codex {
     }
 
     pub fn convert_dual_mono(&mut self) -> R<()> {
-        // First, modify the audio buffer to remove duplicate channels
         self.buffer.strip_multi_mono()?;
-
-        // Now update metadata to reflect the new channel count
-        // Look for metadata chunks that might contain channel information
-        // for chunk in &mut self.metadata {
-        //     match chunk {
-        //         MetadataChunk::IXml(xml) => {
-        //             // Update channel references in XML
-        //             *xml = xml
-        //                 .replace("CHANNELS=2", "CHANNELS=1")
-        //                 .replace("channels=2", "channels=1")
-        //                 .replace("NumChannels=2", "NumChannels=1");
-        //         }
-        //         MetadataChunk::Bext(data) if data.len() >= 356 => {
-        //             // Update channel count in BEXT chunk (at offset 354-355)
-        //             data[354] = 1;
-        //             data[355] = 0; // Little-endian representation of 1
-        //         }
-        //         // Add other format-specific metadata updates as needed
-        //         _ => {}
-        //     }
-        // }
 
         Ok(())
     }
@@ -190,10 +186,22 @@ pub trait Codec: Send + Sync {
     fn decode(&self, input: &[u8]) -> R<AudioBuffer>;
 
     fn decode_file(&self, file_path: &str) -> R<AudioBuffer> {
-        let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+        use memmap2::Mmap;
+        use std::fs::File;
 
-        self.decode(&mapped_file)
+        let mut file = File::open(file_path)?;
+        let file_size = file.metadata()?.len();
+
+        // Only use mmap for large files
+        if file_size > 100 * 1024 * 1024 {
+            // 100MB threshold
+            let mmap = unsafe { Mmap::map(&file)? };
+            self.decode(&mmap)
+        } else {
+            let mut data = vec![0; file_size as usize];
+            file.read_exact(&mut data)?;
+            self.decode(&data)
+        }
     }
 
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata>;

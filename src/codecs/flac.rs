@@ -67,89 +67,107 @@ impl Codec for FlacCodec {
             _ => (1 << (bits_per_sample - 1)) as f32,
         };
 
-        // For very small files, use direct sample iteration which has less overhead
-        if samples_per_channel < 10_000 {
-            // Preallocate audio_data with exact capacity
-            let mut audio_data: Vec<Vec<f32>> =
-                vec![Vec::with_capacity(samples_per_channel); channels as usize];
-
-            // Get all samples at once for better performance
-            let samples = reader.samples().collect::<Result<Vec<i32>, _>>()?;
-
-            // Process all samples at once using chunk iterators
-            for chunk in samples.chunks_exact(channels as usize) {
-                for (ch, &sample) in chunk.iter().enumerate() {
-                    // Normalize the sample value to the range [-1.0, 1.0]
-                    let normalized = sample as f32 / divisor;
-                    audio_data[ch].push(normalized);
-                }
-            }
-
-            // Select the appropriate sample format based on bit depth
-            let format = select_sample_format(bits_per_sample);
-
-            return Ok(AudioBuffer {
-                sample_rate,
-                channels,
-                format,
-                data: audio_data,
-            });
-        }
-
-        // For larger files, use a more efficient approach with parallel processing
-
-        // Collect all samples into a single vector first
-        let all_samples = reader.samples().collect::<Result<Vec<i32>, _>>()?;
         let channel_count = channels as usize;
-        let samples_per_channel = all_samples.len() / channel_count;
-
-        // Create a single vector to hold normalized samples
-        let normalized_samples: Vec<f32> = all_samples
-            .iter()
-            .map(|&sample| sample as f32 / divisor)
-            .collect();
-
-        // Now create per-channel vectors from the normalized samples
         let mut audio_data: Vec<Vec<f32>> =
             vec![Vec::with_capacity(samples_per_channel); channel_count];
 
-        // If we have a large file, use parallel processing
-        if samples_per_channel > 100_000 {
-            // Prepare chunks for parallel processing
-            let chunks: Vec<_> = normalized_samples.chunks(channel_count).collect();
-            let chunk_size = (chunks.len() / rayon::current_num_threads()).max(1024);
+        // OPTIMIZATION: Direct sample iteration with intelligent buffer sizing
+        if samples_per_channel < 10_000 || num_samples == 0 {
+            // For small files or unknown size, process samples directly
+            let mut sample_buffer = Vec::with_capacity(channel_count);
 
-            // Process in parallel using thread-safe methods
-            let results: Vec<Vec<Vec<f32>>> = chunks
-                .par_chunks(chunk_size)
-                .map(|chunk_group| {
-                    // Each thread processes its own chunk and returns a vector of channel data
-                    let mut local_channels =
-                        vec![Vec::with_capacity(chunk_group.len()); channel_count];
+            // Process samples manually grouped by channel count
+            sample_buffer.clear();
+            for sample_result in reader.samples() {
+                match sample_result {
+                    Ok(sample) => {
+                        sample_buffer.push((sample as f32) / divisor);
 
-                    for chunk in chunk_group {
-                        for (ch, &sample) in chunk.iter().enumerate() {
-                            if ch < channel_count {
-                                local_channels[ch].push(sample);
+                        // When we have collected one sample for each channel
+                        if sample_buffer.len() == channel_count {
+                            // Distribute to channels
+                            for (ch, &sample) in
+                                sample_buffer.iter().enumerate().take(channel_count)
+                            {
+                                audio_data[ch].push(sample);
                             }
+                            sample_buffer.clear();
                         }
                     }
-
-                    local_channels
-                })
-                .collect();
-
-            // Combine the results from all threads
-            for (ch, channel_vec) in audio_data.iter_mut().enumerate() {
-                for thread_result in &results {
-                    channel_vec.extend_from_slice(&thread_result[ch]);
+                    Err(e) => return Err(anyhow!("Error reading FLAC samples: {}", e)),
                 }
             }
         } else {
-            // For medium-sized files, use sequential processing
-            for chunk in normalized_samples.chunks_exact(channel_count) {
-                for (ch, &sample) in chunk.iter().enumerate() {
-                    audio_data[ch].push(sample);
+            // For larger files with known size, use parallel processing
+            // OPTIMIZATION: Process directly from reader and avoid extra allocations
+            if samples_per_channel > 100_000 {
+                // Collect blocks of interleaved samples for parallel processing
+                let block_size = (samples_per_channel / rayon::current_num_threads()).max(1024);
+                let blocks_needed = samples_per_channel.div_ceil(block_size);
+
+                let mut sample_blocks: Vec<Vec<i32>> = Vec::with_capacity(blocks_needed);
+                let mut current_block = Vec::with_capacity(block_size * channel_count);
+
+                for sample_result in reader.samples() {
+                    let sample = sample_result?;
+                    current_block.push(sample);
+
+                    // When we've filled a block, store it and start a new one
+                    if current_block.len() == block_size * channel_count {
+                        sample_blocks.push(std::mem::take(&mut current_block));
+                        current_block = Vec::with_capacity(block_size * channel_count);
+                    }
+                }
+
+                // Don't forget any remaining samples
+                if !current_block.is_empty() {
+                    sample_blocks.push(current_block);
+                }
+
+                // Process blocks in parallel
+                let results: Vec<Vec<Vec<f32>>> = sample_blocks
+                    .par_iter()
+                    .map(|block| {
+                        let mut local_channels =
+                            vec![Vec::with_capacity(block.len() / channel_count); channel_count];
+
+                        for chunk in block.chunks_exact(channel_count) {
+                            for (ch, &sample) in chunk.iter().enumerate() {
+                                local_channels[ch].push(sample as f32 / divisor);
+                            }
+                        }
+
+                        local_channels
+                    })
+                    .collect();
+
+                // Combine results
+                for (ch, channel_vec) in audio_data.iter_mut().enumerate() {
+                    for result in &results {
+                        channel_vec.extend_from_slice(&result[ch]);
+                    }
+                }
+            } else {
+                // For medium files, use a more efficient sequential approach
+                // OPTIMIZATION: Batch processing for better cache locality
+                const BATCH_SIZE: usize = 4096; // Adjust based on your system's cache
+
+                // Process in batches for better cache performance
+                while let Ok(batch) = reader
+                    .samples()
+                    .take(BATCH_SIZE * channel_count)
+                    .collect::<Result<Vec<i32>, _>>()
+                {
+                    if batch.is_empty() {
+                        break;
+                    }
+
+                    // Process this batch
+                    for chunk in batch.chunks_exact(channel_count) {
+                        for (ch, &sample) in chunk.iter().enumerate() {
+                            audio_data[ch].push(sample as f32 / divisor);
+                        }
+                    }
                 }
             }
         }
@@ -164,7 +182,6 @@ impl Codec for FlacCodec {
             data: audio_data,
         })
     }
-
     fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
         // Get audio parameters
         let bits_per_sample = get_bits_per_sample(buffer.format);

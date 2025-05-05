@@ -37,11 +37,23 @@ pub struct AudioBuffer {
 impl AudioBuffer {
     pub fn resample(&mut self, new_rate: u32) {
         if self.sample_rate != new_rate {
-            let resampled_data =
-                resample::resample_windowed_sinc(&self.data[0], self.sample_rate, new_rate);
-            self.data[0] = resampled_data;
+            println!("Resampling from {}Hz to {}Hz", self.sample_rate, new_rate);
+            // Resample each channel individually
+            for i in 0..self.data.len() {
+                self.data[i] =
+                    resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate);
+            }
             self.sample_rate = new_rate;
         }
+    }
+    pub fn resample_channel(&mut self, i: usize, new_rate: u32) -> Vec<f32> {
+        let mut result = Vec::new();
+        if self.sample_rate != new_rate {
+            result = resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate)
+        } else {
+            result = self.data[i].clone();
+        }
+        result
     }
     pub fn strip_multi_mono(&mut self) -> R<()> {
         if self.data.is_empty() || self.channels < 2 {

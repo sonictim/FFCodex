@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"fn":["encode_fixed_size_frame","encode_with_fixed_block_size"],"mod":["bitsink","component","config","constant","error","source"]};
