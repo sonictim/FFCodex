@@ -1,5 +1,4 @@
 pub use anyhow::{Result as R, anyhow};
-use claxon::input;
 use ffcodex_lib::*;
 
 fn main() -> R<()> {
