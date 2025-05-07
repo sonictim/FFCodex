@@ -5,10 +5,10 @@ fn main() -> R<()> {
     // Use the directly exported get_version function
     let version = chromaprint_bindings::get_version();
     println!("Chromaprint version: {}", version);
-    // let input_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
+    let input_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
 
-    // let fp = get_fingerprint(input_file)?;
-    // println!("Fingerprint: {}", fp);
+    let fp = get_fingerprint(input_file)?;
+    println!("Fingerprint: {}", fp);
     // // let output_file = "/Users/tfarrell/Desktop/subset test/THUNDER DUAL MONO 2.wav";
 
     // // flac_debug(input_file)?;

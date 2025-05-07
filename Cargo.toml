@@ -20,7 +20,7 @@ byteorder = "1.5.0"
 claxon = "0.4.3"
 flacenc = "0.4.0"
 # lame = "0.1.3"
-libc = "0.2"  # Added for C memory management
+libc = "0.2"       # Added for C memory management
 memmap2 = "0.9.5"
 metaflac = "0.2.8"
 # minimp3 = "0.5.1"
@@ -29,6 +29,7 @@ sha2 = "0.10.9"
 
 
 [build-dependencies]
+bindgen = "0.71.1"
 cc = "1.2.21"
 cmake = "0.1.50"
-
+git2 = "0.20.2"

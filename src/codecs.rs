@@ -3,10 +3,12 @@ use crate::prelude::*;
 mod flac;
 // mod mp3;
 mod wav;
+// mod wavpack;
 // pub use aif::AifCodec;
 pub use flac::FlacCodec;
 // pub use mp3::Mp3Codec;
 pub use wav::WavCodec;
+// pub use wavpack::*;
 
 pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
     let extension = std::path::Path::new(file_path)

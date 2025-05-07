@@ -1,5 +1,5 @@
+use crate::chromaprint_bindings::{CHROMAPRINT_ALGORITHM_DEFAULT, Chromaprint};
 use crate::prelude::*;
-use crate::chromaprint_bindings::{Chromaprint, CHROMAPRINT_ALGORITHM_DEFAULT};
 use base64::{Engine as _, engine::general_purpose};
 
 impl Codex {
@@ -41,12 +41,25 @@ impl Codex {
             c.feed(&samples);
             c.finish();
 
-            if let Some(fingerprint) = c.get_fingerprint() {
+            // if let Some(fingerprint) = c.get_fingerprint() {
+            //     println!(
+            //         "Success! Generated Chromaprint fingerprint for: {}",
+            //         self.get_filename()
+            //     );
+            //     return Ok(fingerprint);
+            // }
+            if let Some(fingerprint) = c.get_raw_fingerprint() {
                 println!(
-                    "Success! Generated Chromaprint fingerprint for: {}",
-                    self.get_filename()
+                    "Generated raw fingerprint for: {} size; {}",
+                    self.get_filename(),
+                    fingerprint.len()
                 );
-                return Ok(fingerprint);
+                // Convert Vec<i32> to bytes before encoding
+                let bytes: Vec<u8> = fingerprint.iter().flat_map(|&x| x.to_le_bytes()).collect();
+                let encoded = general_purpose::STANDARD.encode(&bytes);
+                if !encoded.is_empty() {
+                    return Ok(encoded);
+                }
             }
         }
 
