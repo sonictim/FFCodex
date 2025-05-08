@@ -49,13 +49,11 @@ impl AudioBuffer {
         }
     }
     pub fn resample_channel(&mut self, i: usize, new_rate: u32) -> Vec<f32> {
-        let mut result = Vec::new();
         if self.sample_rate != new_rate {
-            result = resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate)
+            resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate)
         } else {
-            result = self.data[i].clone();
+            self.data[i].clone()
         }
-        result
     }
     pub fn strip_multi_mono(&mut self) -> R<()> {
         if self.data.is_empty() || self.channels < 2 {

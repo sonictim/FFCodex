@@ -4,26 +4,27 @@ use base64::{Engine as _, engine::general_purpose};
 
 impl Codex {
     pub fn get_chromaprint_fingerprint(&mut self) -> R<String> {
-        println!(
-            "Generating Chromaprint fingerprint for: {}",
-            self.get_filename()
-        );
-
         // This is fine since your implementation checks internally
-        self.resample(48000);
 
-        const MIN_SAMPLES: usize = 48000; // 1 second minimum at 48kHz
+        let sample_rate = if self.buffer.sample_rate == 44100 {
+            44100
+        } else {
+            48000
+        };
 
-        // Avoid allocating samples if we don't have enough audio data
-        let min_channel_length = self
+        self.resample(sample_rate);
+
+        const MIN_SAMPLES_PER_CHANNEL: usize = 24000; // 0.5 seconds at 48kHz per channel
+
+        // Check if we have enough samples in any channel
+        let has_enough_samples = self
             .buffer
             .data
             .iter()
-            .map(|ch| ch.len())
-            .min()
-            .unwrap_or(0);
-        if min_channel_length < MIN_SAMPLES / self.buffer.channels as usize {
-            // Skip directly to PCM hash for very short files
+            .any(|ch| ch.len() >= MIN_SAMPLES_PER_CHANNEL);
+
+        if !has_enough_samples {
+            println!("Audio is too short for Chromaprint, using PCM hash instead");
             return self.generate_pcm_hash();
         }
 
@@ -37,7 +38,7 @@ impl Codex {
 
         // Try Chromaprint fingerprinting
         let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT);
-        if c.start(48000, num_channels) {
+        if c.start(sample_rate as i32, num_channels) {
             c.feed(&samples);
             c.finish();
 
