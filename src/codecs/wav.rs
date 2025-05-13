@@ -200,13 +200,34 @@ impl Codec for WavCodec {
         // Let's check the channel count in the WAV header before extraction
         if file_path.ends_with(".wav") {
             let mut cursor = Cursor::new(&mapped_file);
-            cursor.seek(SeekFrom::Start(22))?; // Position of channel count in WAV header
-            let channel_count = cursor.read_u16::<LittleEndian>()?;
-            println!(
-                "extract_file_metadata_chunks - File has {} channels in header",
-                channel_count
-            );
+
+            // Verify minimum header size first
+            if mapped_file.len() >= 22 + 2 {
+                // 22 bytes offset + 2 bytes for channel count
+                cursor.seek(SeekFrom::Start(22))?; // Position of channel count in WAV header
+
+                // Use match to handle the result explicitly
+                match cursor.read_u16::<LittleEndian>() {
+                    Ok(channel_count) => {
+                        println!(
+                            "extract_file_metadata_chunks - File has {} channels in header",
+                            channel_count
+                        );
+
+                        // Validate the channel count (reasonable bounds check)
+                        if channel_count < 1 || channel_count > 128 {
+                            println!("WARNING: Suspicious channel count: {}", channel_count);
+                        }
+                    }
+                    Err(e) => {
+                        println!("WARNING: Failed to read channel count: {}", e);
+                    }
+                }
+            } else {
+                println!("WARNING: File too small to contain valid WAV header");
+            }
         }
+
         let chunks = self.extract_metadata_chunks(&mapped_file)?;
         Ok(Metadata::Wav(chunks))
     }
