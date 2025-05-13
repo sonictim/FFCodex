@@ -41,7 +41,10 @@ pub fn get_fingerprint(path: &str) -> R<String> {
     let mut codex = Codex::default();
     match codex.open(path) {
         Ok(_) => codex.get_chromaprint_fingerprint(),
-        Err(_) => Ok("FAILED".to_string()),
+        Err(_) => {
+            println!("Failed to Open");
+            Ok("FAILED".to_string())
+        }
     }
 }
 
