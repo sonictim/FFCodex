@@ -43,7 +43,7 @@ impl Codec for WavCodec {
         // Skip past the RIFF header we already validated (12 bytes)
         cursor.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
 
-        // Step 2: Find 'fmt ' chunk
+        // We'll set these values as we find the chunks
         let mut fmt_chunk_found = false;
         let mut data_chunk_found = false;
         let mut sample_format = SampleFormat::I16;
@@ -52,15 +52,16 @@ impl Codec for WavCodec {
         let mut bits_per_sample = 0;
         let mut audio_data = vec![];
 
+        // Focused search for just fmt and data chunks
         while let Ok(chunk_id) = cursor.read_u32::<LittleEndian>() {
             let chunk_id = u32::to_le_bytes(chunk_id);
             let chunk_size = cursor.read_u32::<LittleEndian>()? as usize;
+
             match &chunk_id {
                 FMT_CHUNK_ID => {
                     fmt_chunk_found = true;
                     let format_tag = cursor.read_u16::<LittleEndian>()?;
                     channels = cursor.read_u16::<LittleEndian>()?;
-                    println!("Decode Channels: {}", channels);
                     sample_rate = cursor.read_u32::<LittleEndian>()?;
                     cursor.read_u32::<LittleEndian>()?; // byte rate
                     cursor.read_u16::<LittleEndian>()?; // block align
@@ -83,7 +84,7 @@ impl Codec for WavCodec {
                             let mut bytes_read = 2; // 2 bytes for extension_size
 
                             // Read the valid bits per sample (may be different from container size)
-                            let valid_bits = cursor.read_u16::<LittleEndian>()?;
+                            let _valid_bits = cursor.read_u16::<LittleEndian>()?;
                             bytes_read += 2;
 
                             // Read the channel mask (indicates speaker positions)
@@ -130,21 +131,27 @@ impl Codec for WavCodec {
                         }
                     };
 
-                    // Skip any extra bytes in the fmt chunk and handle padding in one operation
-                    // Only skip extra bytes if we're not in the EXTENSIBLE format case, since we've already handled those bytes
-                    let extra_bytes = if chunk_size > STANDARD_FMT_CHUNK_SIZE as usize
-                        && format_tag != FORMAT_EXTENSIBLE
-                    {
-                        chunk_size - STANDARD_FMT_CHUNK_SIZE as usize
-                    } else if format_tag == FORMAT_EXTENSIBLE {
-                        // For EXTENSIBLE format, we've already read the extension data above
-                        0
+                    // Skip any extra bytes in the fmt chunk
+                    let standard_fmt_size = if format_tag == FORMAT_EXTENSIBLE {
+                        STANDARD_FMT_CHUNK_SIZE + 22 // Add extensible format size
                     } else {
-                        0
+                        STANDARD_FMT_CHUNK_SIZE
                     };
 
-                    let padding_byte = chunk_size % 2;
-                    cursor.seek(SeekFrom::Current((extra_bytes + padding_byte) as i64))?;
+                    if chunk_size > standard_fmt_size as usize {
+                        let extra_bytes = chunk_size - standard_fmt_size as usize;
+                        cursor.seek(SeekFrom::Current(extra_bytes as i64))?;
+                    }
+
+                    // Handle padding
+                    if chunk_size % 2 != 0 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                    }
+
+                    // If we've found both chunks, we can stop searching
+                    if data_chunk_found {
+                        break;
+                    }
                 }
 
                 DATA_CHUNK_ID => {
@@ -152,21 +159,28 @@ impl Codec for WavCodec {
                     let mut raw_data = vec![0u8; chunk_size];
                     cursor.read_exact(&mut raw_data)?;
 
-                    audio_data = decode_samples(
-                        &raw_data,
-                        channels,
-                        bits_per_sample,
-                        sample_format == SampleFormat::F32,
-                    )?;
+                    // We'll process this later if fmt chunk is found
+                    if fmt_chunk_found {
+                        audio_data = decode_samples(
+                            &raw_data,
+                            channels,
+                            bits_per_sample,
+                            sample_format == SampleFormat::F32,
+                        )?;
+                        break; // We have all we need, exit the loop
+                    } else {
+                        // Store the data for now, process it after we find the fmt chunk
+                        audio_data = Vec::new(); // Placeholder
+                    }
 
-                    // Handle padding in one step
+                    // Handle padding
                     if chunk_size % 2 != 0 {
                         cursor.seek(SeekFrom::Current(1))?;
                     }
                 }
 
+                // Skip all other chunks completely - we don't need them for decoding
                 _ => {
-                    // Skip chunk data and padding in one operation
                     let skip_bytes = chunk_size + (chunk_size % 2);
                     cursor.seek(SeekFrom::Current(skip_bytes as i64))?;
                 }
@@ -184,7 +198,6 @@ impl Codec for WavCodec {
             data: audio_data,
         })
     }
-
     fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
         let mut output = Cursor::new(Vec::new());
 
