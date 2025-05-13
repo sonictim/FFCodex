@@ -16,7 +16,7 @@ pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
         .and_then(|ext| ext.to_str())
         .ok_or_else(|| anyhow::anyhow!("Invalid file extension"))?;
 
-    match extension {
+    match extension.to_lowercase().as_str() {
         "wav" => Ok(Box::new(WavCodec)),
         "flac" => Ok(Box::new(FlacCodec)),
         // "aif" => Ok(Box::new(AifCodec)),
