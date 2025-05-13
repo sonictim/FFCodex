@@ -97,6 +97,10 @@ impl Codex {
         self.buffer.resample(new_rate);
     }
 
+    pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
+        self.buffer.change_bit_depth(new_bit_depth);
+    }
+
     pub fn export(&self, output_file: &str) -> R<()> {
         let temp_file = std::env::temp_dir().join("temp_audio_file");
         let temp_path = temp_file.to_str().unwrap_or("");

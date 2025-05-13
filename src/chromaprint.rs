@@ -6,6 +6,10 @@ impl Codex {
     pub fn get_chromaprint_fingerprint(&mut self) -> R<String> {
         // This is fine since your implementation checks internally
 
+        if self.buffer.format.bits_per_sample() > 24 {
+            self.change_bit_depth(24)
+        }
+
         let sample_rate = if self.buffer.sample_rate == 44100 {
             44100
         } else {

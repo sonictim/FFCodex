@@ -9,6 +9,10 @@ pub fn build() {
     let is_windows = target.contains("windows");
     let is_macos = target.contains("apple");
 
+    println!(
+        "cargo:warning=FFCodex version: {}",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("cargo:warning=Using pre-compiled chromaprint static library");
 
     // Set the search path for the chromaprint library

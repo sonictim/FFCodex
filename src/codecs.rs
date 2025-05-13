@@ -55,6 +55,31 @@ impl AudioBuffer {
             self.data[i].clone()
         }
     }
+    pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
+        if self.format.bits_per_sample() != new_bit_depth {
+            println!(
+                "Changing bit depth from {} to {}",
+                self.format.bits_per_sample(),
+                new_bit_depth
+            );
+            for i in 0..self.data.len() {
+                self.data[i] = resample::change_bit_depth(
+                    &self.data[i],
+                    self.sample_rate,
+                    new_bit_depth as u32,
+                    true,
+                );
+            }
+            self.format = match new_bit_depth {
+                8 => SampleFormat::U8,
+                16 => SampleFormat::I16,
+                24 => SampleFormat::I24,
+                32 => SampleFormat::F32,
+                _ => SampleFormat::F32,
+            };
+        }
+    }
+
     pub fn strip_multi_mono(&mut self) -> R<()> {
         if self.data.is_empty() || self.channels < 2 {
             return Ok(());
