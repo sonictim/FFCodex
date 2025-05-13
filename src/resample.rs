@@ -85,7 +85,6 @@ pub fn change_bit_depth(input: &[f32], src_bits: u32, dst_bits: u32, dither: boo
     let dst_max_value = (1 << (dst_bits - 1)) as f32 - 1.0;
 
     // For dithering we'll use triangular probability density function (TPDF)
-    let mut rng = rand::thread_rng();
     let dither_amplitude = if dither && dst_bits < src_bits {
         // Set dither amplitude to 1 LSB of the target format
         1.0 / dst_max_value
@@ -109,7 +108,7 @@ pub fn change_bit_depth(input: &[f32], src_bits: u32, dst_bits: u32, dither: boo
             let quantized = (dithered_sample * dst_max_value).round() / dst_max_value;
 
             // Clip to the valid range for the bit depth
-            quantized.max(-1.0).min(1.0)
+            quantized.clamp(-1.0, 1.0)
         })
         .collect()
 }
@@ -151,12 +150,16 @@ pub fn convert_to_pcm_bytes(input: &[f32], bit_depth: u32, dither: bool) -> Vec<
             }
             3 => {
                 // 24-bit
-                let bytes = (value as i32).to_le_bytes();
+                let bytes = (value).to_le_bytes();
                 output.extend_from_slice(&bytes[0..3]); // Take only the first 3 bytes
             }
-            4 | _ => {
+            4 => {
                 // 32-bit
-                output.extend_from_slice(&(value as i32).to_le_bytes());
+                output.extend_from_slice(&(value).to_le_bytes());
+            }
+            _ => {
+                // For any other bit depth, default to 32-bit
+                output.extend_from_slice(&(value).to_le_bytes());
             }
         }
     }
