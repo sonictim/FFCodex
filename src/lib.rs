@@ -82,8 +82,8 @@ impl Codex {
         let codec = get_codec(input_file)?;
         let file = std::fs::File::open(input_file)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        self.buffer = codec.decode(&mapped_file)?;
         self.metadata = codec.extract_metadata_from_file(input_file)?;
+        self.buffer = codec.decode(&mapped_file)?;
         self.codec = Some(codec);
         self.path = PathBuf::from(input_file);
         Ok(())
