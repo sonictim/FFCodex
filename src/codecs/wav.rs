@@ -77,23 +77,29 @@ impl Codec for WavCodec {
                             // The format is a 22-byte structure after the standard fmt chunk
 
                             // First, read the extension size (should be 22 for extensible format)
-                            let _extension_size = cursor.read_u16::<LittleEndian>()?;
+                            let extension_size = cursor.read_u16::<LittleEndian>()?;
+
+                            // Track bytes already read for EXTENSIBLE format
+                            let mut bytes_read = 2; // 2 bytes for extension_size
 
                             // Read the valid bits per sample (may be different from container size)
-                            let _valid_bits = cursor.read_u16::<LittleEndian>()?;
+                            let valid_bits = cursor.read_u16::<LittleEndian>()?;
+                            bytes_read += 2;
 
                             // Read the channel mask (indicates speaker positions)
                             let _channel_mask = cursor.read_u32::<LittleEndian>()?;
+                            bytes_read += 4;
 
                             // Read the subformat GUID (first 2 bytes are the actual format code)
                             let mut guid = [0u8; 16];
                             cursor.read_exact(&mut guid)?;
+                            bytes_read += 16;
 
                             // The first two bytes of the GUID indicate the actual format
                             let subformat = u16::from_le_bytes([guid[0], guid[1]]);
 
-                            // Now determine the sample format based on the subformat
-                            match (subformat, bits) {
+                            // Return the correct format for the subformat
+                            let format = match (subformat, bits) {
                                 (FORMAT_PCM, BIT_DEPTH_8) => SampleFormat::U8,
                                 (FORMAT_PCM, BIT_DEPTH_16) => SampleFormat::I16,
                                 (FORMAT_PCM, BIT_DEPTH_24) => SampleFormat::I24,
@@ -105,7 +111,16 @@ impl Codec for WavCodec {
                                         subformat, bits
                                     )));
                                 }
+                            };
+
+                            // Check if there are more bytes in the extension that we need to skip
+                            if extension_size > bytes_read {
+                                cursor.seek(SeekFrom::Current(
+                                    (extension_size - bytes_read) as i64,
+                                ))?;
                             }
+
+                            format
                         }
                         _ => {
                             return Err(anyhow!(format!(
@@ -116,8 +131,14 @@ impl Codec for WavCodec {
                     };
 
                     // Skip any extra bytes in the fmt chunk and handle padding in one operation
-                    let extra_bytes = if chunk_size > STANDARD_FMT_CHUNK_SIZE as usize {
+                    // Only skip extra bytes if we're not in the EXTENSIBLE format case, since we've already handled those bytes
+                    let extra_bytes = if chunk_size > STANDARD_FMT_CHUNK_SIZE as usize
+                        && format_tag != FORMAT_EXTENSIBLE
+                    {
                         chunk_size - STANDARD_FMT_CHUNK_SIZE as usize
+                    } else if format_tag == FORMAT_EXTENSIBLE {
+                        // For EXTENSIBLE format, we've already read the extension data above
+                        0
                     } else {
                         0
                     };
