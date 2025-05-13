@@ -201,30 +201,61 @@ impl Codec for WavCodec {
         if file_path.ends_with(".wav") {
             let mut cursor = Cursor::new(&mapped_file);
 
-            // Verify minimum header size first
-            if mapped_file.len() >= 22 + 2 {
-                // 22 bytes offset + 2 bytes for channel count
-                cursor.seek(SeekFrom::Start(22))?; // Position of channel count in WAV header
+            // Read RIFF header first to validate
+            let mut header = [0u8; 12];
+            if cursor.read_exact(&mut header).is_ok() {
+                if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+                    println!("WARNING: Not a valid WAVE file");
+                } else {
+                    // Look for the fmt chunk
+                    while cursor.position() < mapped_file.len() as u64 {
+                        let mut chunk_id = [0u8; 4];
+                        if cursor.read(&mut chunk_id)? < 4 {
+                            break;
+                        }
 
-                // Use match to handle the result explicitly
-                match cursor.read_u16::<LittleEndian>() {
-                    Ok(channel_count) => {
-                        println!(
-                            "extract_file_metadata_chunks - File has {} channels in header",
-                            channel_count
-                        );
+                        let chunk_size = cursor.read_u32::<LittleEndian>()?;
 
-                        // Validate the channel count (reasonable bounds check)
-                        if channel_count < 1 || channel_count > 128 {
-                            println!("WARNING: Suspicious channel count: {}", channel_count);
+                        if &chunk_id == FMT_CHUNK_ID {
+                            // Found fmt chunk
+                            if chunk_size >= 16 {
+                                // Ensure fmt chunk is at least standard size
+                                // Format type
+                                let format_tag = cursor.read_u16::<LittleEndian>()?;
+                                // Channel count is right after format tag
+                                let channel_count = cursor.read_u16::<LittleEndian>()?;
+
+                                println!(
+                                    "extract_file_metadata_chunks - File has {} channels in fmt chunk",
+                                    channel_count
+                                );
+
+                                // Validate the channel count
+                                if !(1..=128).contains(&channel_count) {
+                                    println!(
+                                        "WARNING: Suspicious channel count: {}",
+                                        channel_count
+                                    );
+                                }
+
+                                // Get sample rate while we're at it
+                                let sample_rate = cursor.read_u32::<LittleEndian>()?;
+                                println!(
+                                    "Sample rate: {} Hz, Format tag: {}",
+                                    sample_rate, format_tag
+                                );
+
+                                // Don't need to read further in fmt chunk
+                                break;
+                            }
+                        } else {
+                            // Skip this chunk
+                            cursor.seek(SeekFrom::Current(
+                                chunk_size as i64 + (chunk_size % 2) as i64,
+                            ))?;
                         }
                     }
-                    Err(e) => {
-                        println!("WARNING: Failed to read channel count: {}", e);
-                    }
                 }
-            } else {
-                println!("WARNING: File too small to contain valid WAV header");
             }
         }
 
