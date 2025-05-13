@@ -615,19 +615,36 @@ fn decode_samples(
         _ => return Err(anyhow!("Unsupported bit depth")),
     };
 
-    let samples_per_channel = input.len() / (channels as usize * bytes_per_sample);
+    // Total frame count = total bytes / (bytes per sample * channel count)
+    let frame_count = input.len() / (bytes_per_sample * channels as usize);
+
+    // Ensure we have enough data
+    if frame_count == 0 {
+        return Err(anyhow!("No audio frames found in data"));
+    }
+
+    println!(
+        "Decoding {} channels, {} frames per channel, {} bits per sample",
+        channels, frame_count, bits_per_sample
+    );
 
     let output: Vec<Vec<f32>> = (0..channels as usize)
         .into_par_iter() // Parallelize over channels
         .map(|ch| {
-            let mut channel_data = vec![0.0; samples_per_channel];
+            let mut channel_data = Vec::with_capacity(frame_count);
 
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..samples_per_channel {
-                let pos = i * channels as usize + ch;
-                let sample_idx = pos * bytes_per_sample;
+            // For each frame
+            for frame in 0..frame_count {
+                // Calculate the byte index of this sample
+                // This is the formula that properly handles interleaved audio of any channel count
+                let sample_idx = (frame * channels as usize + ch) * bytes_per_sample;
 
-                // Bounds check is unnecessary since we calculated samples_per_channel based on input length
+                // Check bounds to prevent buffer overruns
+                if sample_idx + bytes_per_sample > input.len() {
+                    break;
+                }
+
+                // Convert the bytes to a float sample
                 let val = match bits_per_sample {
                     BIT_DEPTH_8 => input[sample_idx] as f32 / U8_SCALE - 1.0,
                     BIT_DEPTH_16 => {
@@ -664,9 +681,10 @@ fn decode_samples(
                             val as f32 / I32_DIVISOR
                         }
                     }
-                    _ => return vec![],
+                    _ => 0.0, // Should never reach here due to earlier check
                 };
-                channel_data[i] = val;
+
+                channel_data.push(val);
             }
 
             channel_data
