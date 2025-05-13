@@ -59,6 +59,7 @@ impl Codec for WavCodec {
                     fmt_chunk_found = true;
                     let format_tag = cursor.read_u16::<LittleEndian>()?;
                     channels = cursor.read_u16::<LittleEndian>()?;
+                    println!("Decode Channels: {}", channels);
                     sample_rate = cursor.read_u32::<LittleEndian>()?;
                     cursor.read_u32::<LittleEndian>()?; // byte rate
                     cursor.read_u16::<LittleEndian>()?; // block align
