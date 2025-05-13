@@ -213,7 +213,20 @@ pub fn convert_from_pcm_bytes(input: &[u8], bit_depth: u32) -> Vec<f32> {
                     0
                 }
             }
-            32 | _ => {
+            32 => {
+                if offset + 3 < input.len() {
+                    let bytes = [
+                        input[offset],
+                        input[offset + 1],
+                        input[offset + 2],
+                        input[offset + 3],
+                    ];
+                    i32::from_le_bytes(bytes)
+                } else {
+                    0
+                }
+            }
+            _ => {
                 if offset + 3 < input.len() {
                     let bytes = [
                         input[offset],
