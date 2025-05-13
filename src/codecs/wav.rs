@@ -3,6 +3,7 @@ use crate::prelude::*;
 // Format tags
 const FORMAT_PCM: u16 = 1;
 const FORMAT_IEEE_FLOAT: u16 = 3;
+const FORMAT_EXTENSIBLE: u16 = 65534; // 0xFFFE
 
 // Chunk Identifiers
 const RIFF_CHUNK_ID: &[u8; 4] = b"RIFF";
@@ -71,6 +72,41 @@ impl Codec for WavCodec {
                         (FORMAT_PCM, BIT_DEPTH_24) => SampleFormat::I24,
                         (FORMAT_PCM, BIT_DEPTH_32) => SampleFormat::I32,
                         (FORMAT_IEEE_FLOAT, BIT_DEPTH_32) => SampleFormat::F32,
+                        (FORMAT_EXTENSIBLE, bits) => {
+                            // For WAVE_FORMAT_EXTENSIBLE, we need to read the extended format data
+                            // The format is a 22-byte structure after the standard fmt chunk
+
+                            // First, read the extension size (should be 22 for extensible format)
+                            let _extension_size = cursor.read_u16::<LittleEndian>()?;
+
+                            // Read the valid bits per sample (may be different from container size)
+                            let _valid_bits = cursor.read_u16::<LittleEndian>()?;
+
+                            // Read the channel mask (indicates speaker positions)
+                            let _channel_mask = cursor.read_u32::<LittleEndian>()?;
+
+                            // Read the subformat GUID (first 2 bytes are the actual format code)
+                            let mut guid = [0u8; 16];
+                            cursor.read_exact(&mut guid)?;
+
+                            // The first two bytes of the GUID indicate the actual format
+                            let subformat = u16::from_le_bytes([guid[0], guid[1]]);
+
+                            // Now determine the sample format based on the subformat
+                            match (subformat, bits) {
+                                (FORMAT_PCM, BIT_DEPTH_8) => SampleFormat::U8,
+                                (FORMAT_PCM, BIT_DEPTH_16) => SampleFormat::I16,
+                                (FORMAT_PCM, BIT_DEPTH_24) => SampleFormat::I24,
+                                (FORMAT_PCM, BIT_DEPTH_32) => SampleFormat::I32,
+                                (FORMAT_IEEE_FLOAT, BIT_DEPTH_32) => SampleFormat::F32,
+                                _ => {
+                                    return Err(anyhow!(format!(
+                                        "Unsupported extensible format: subformat {}, bits {}",
+                                        subformat, bits
+                                    )));
+                                }
+                            }
+                        }
                         _ => {
                             return Err(anyhow!(format!(
                                 "Unsupported format: tag {}, bits {}",
