@@ -5,7 +5,6 @@ use chromaprint_bindings::{Chromaprint, get_version};
 fn main() {
     println!("Chromaprint version: {}", get_version());
 
-    // Create a new Chromaprint context
     let chromaprint = Chromaprint::default();
 
     // Start fingerprinting
