@@ -40,9 +40,6 @@ pub struct AudioBuffer {
 impl AudioBuffer {
     pub fn resample(&mut self, new_rate: u32) {
         if self.sample_rate != new_rate {
-            println!("Resampling from {}Hz to {}Hz", self.sample_rate, new_rate);
-            let start_time = std::time::Instant::now();
-
             // Resample each channel individually using optimized functions
             for i in 0..self.data.len() {
                 // Try fast common ratios first, fall back to optimized general algorithm
@@ -56,9 +53,6 @@ impl AudioBuffer {
                 });
             }
 
-            let resample_duration = start_time.elapsed();
-            println!("Resampling took: {:.2}ms", resample_duration.as_millis());
-
             self.sample_rate = new_rate;
         }
     }
@@ -71,11 +65,6 @@ impl AudioBuffer {
     }
     pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
         if self.format.bits_per_sample() != new_bit_depth {
-            println!(
-                "Changing bit depth from {} to {}",
-                self.format.bits_per_sample(),
-                new_bit_depth
-            );
             for i in 0..self.data.len() {
                 self.data[i] = resample::change_bit_depth(
                     &self.data[i],
@@ -181,50 +170,7 @@ impl MetadataChunk {
         }
     }
     pub fn parse(&self) -> R<()> {
-        match self {
-            MetadataChunk::Bext(data) => {
-                let description = String::from_utf8_lossy(&data[0..256])
-                    .trim_end_matches('\0')
-                    .to_string();
-                let originator = String::from_utf8_lossy(&data[256..288])
-                    .trim_end_matches('\0')
-                    .to_string();
-                let time_reference = u64::from_le_bytes(data[400..408].try_into().unwrap());
-
-                println!("Description: {}", description);
-                println!("Originator: {}", originator);
-                println!("Time Reference: {}", time_reference);
-            }
-            MetadataChunk::IXml(data) => {
-                println!("iXML Data: {}", data);
-            }
-            MetadataChunk::Soundminer(data) => {
-                println!("Soundminer Data: {:?}", data);
-            }
-            MetadataChunk::ID3(data) => {
-                println!("ID3 Data: {:?}", data);
-            }
-            MetadataChunk::APE(data) => {
-                println!("APE Data: {:?}", data);
-            }
-            MetadataChunk::Picture {
-                mime_type,
-                description,
-                data,
-            } => {
-                println!("Picture MIME Type: {}", mime_type);
-                println!("Description: {}", description);
-                println!("Data: {:?}", data);
-            }
-            MetadataChunk::TextTag { key, value } => {
-                println!("Text Tag Key: {}", key);
-                println!("Value: {}", value);
-            }
-            MetadataChunk::Unknown { id, data } => {
-                println!("Unknown Chunk ID: {}", id);
-                println!("Data: {:?}", data);
-            }
-        }
+        // Silent parsing - debug prints removed for performance
         Ok(())
     }
 

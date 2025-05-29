@@ -8,7 +8,7 @@ fn main() -> R<()> {
     println!("Chromaprint version: {}", version);
 
     // Get input file from command line arguments
-    let args: Vec<String> = std::env::args().collect();
+    let _args: Vec<String> = std::env::args().collect();
     // if args.len() < 2 {
     //     eprintln!("Usage: {} <input_file>", args[0]);
     //     std::process::exit(1);
@@ -22,13 +22,13 @@ fn main() -> R<()> {
 
     let input_file = "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif";
 
-    println!("Input file: {}", input_file);
+    // println!("Input file: {}", input_file);
 
-    let fp = get_fingerprint(input_file)?;
-    println!("Fingerprint: {}", fp);
+    let _fp = get_fingerprint(input_file)?;
+    // println!("Fingerprint: {}", fp);
 
-    let elapsed_time = start_time.elapsed();
-    println!("Finished in {} seconds", elapsed_time.as_secs_f32());
+    // let elapsed_time = start_time.elapsed();
+    // println!("Finished in {} seconds", elapsed_time.as_secs_f32());
     let output_file =
         "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR 2.aif";
 
