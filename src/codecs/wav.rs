@@ -38,6 +38,12 @@ impl Codec for WavCodec {
     fn decode(&self, input: &[u8]) -> R<AudioBuffer> {
         self.validate_file_format(input)?;
 
+        // Additional file size validation
+        if input.len() < 44 {
+            // Minimum size for a valid WAV file
+            return Err(anyhow!("WAV file too small: {} bytes", input.len()));
+        }
+
         let mut cursor = Cursor::new(input);
 
         // Skip past the RIFF header we already validated (12 bytes)
@@ -83,7 +89,7 @@ impl Codec for WavCodec {
                             let mut bytes_read = 2; // 2 bytes for extension_size
 
                             // Read the valid bits per sample (may be different from container size)
-                            let valid_bits = cursor.read_u16::<LittleEndian>()?;
+                            let _valid_bits = cursor.read_u16::<LittleEndian>()?;
                             bytes_read += 2;
 
                             // Read the channel mask (indicates speaker positions)

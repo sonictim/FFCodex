@@ -1,10 +1,10 @@
 use crate::prelude::*;
-// mod aif;
+mod aif;
 mod flac;
 // mod mp3;
 mod wav;
 // mod wavpack;
-// pub use aif::AifCodec;
+pub use aif::AifCodec;
 pub use flac::FlacCodec;
 // pub use mp3::Mp3Codec;
 pub use wav::WavCodec;
@@ -19,7 +19,8 @@ pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
     match extension.to_lowercase().as_str() {
         "wav" => Ok(Box::new(WavCodec)),
         "flac" => Ok(Box::new(FlacCodec)),
-        // "aif" => Ok(Box::new(AifCodec)),
+        "aif" => Ok(Box::new(AifCodec)),
+        "aiff" => Ok(Box::new(AifCodec)),
         // "mp3" => Ok(Box::new(Mp3Codec)),
         _ => Err(anyhow::anyhow!(
             "No codec found for extension: {}",
@@ -40,11 +41,24 @@ impl AudioBuffer {
     pub fn resample(&mut self, new_rate: u32) {
         if self.sample_rate != new_rate {
             println!("Resampling from {}Hz to {}Hz", self.sample_rate, new_rate);
-            // Resample each channel individually
+            let start_time = std::time::Instant::now();
+
+            // Resample each channel individually using optimized functions
             for i in 0..self.data.len() {
-                self.data[i] =
-                    resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate);
+                // Try fast common ratios first, fall back to optimized general algorithm
+                self.data[i] = resample::resample_fast_common_ratios(
+                    &self.data[i],
+                    self.sample_rate,
+                    new_rate,
+                )
+                .unwrap_or_else(|| {
+                    resample::resample_optimized(&self.data[i], self.sample_rate, new_rate)
+                });
             }
+
+            let resample_duration = start_time.elapsed();
+            println!("Resampling took: {:.2}ms", resample_duration.as_millis());
+
             self.sample_rate = new_rate;
         }
     }

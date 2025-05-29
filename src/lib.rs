@@ -7,7 +7,7 @@ mod prelude;
 use crate::prelude::*;
 mod chromaprint;
 pub mod chromaprint_bindings;
-mod resample;
+pub mod resample;
 
 // Standard bit depths
 const BIT_DEPTH_8: u16 = 8;
@@ -83,13 +83,53 @@ impl Codex {
     }
 
     fn open(&mut self, input_file: &str) -> R<()> {
+        let start_time = std::time::Instant::now();
+
+        println!("Opening file: {}", input_file);
+        let codec_start = std::time::Instant::now();
         let codec = get_codec(input_file)?;
+        println!(
+            "Codec creation took: {:.2}ms",
+            codec_start.elapsed().as_millis()
+        );
+
+        let file_start = std::time::Instant::now();
         let file = std::fs::File::open(input_file)?;
+        let file_size = file.metadata()?.len();
+        println!(
+            "File open took: {:.2}ms, size: {:.1}MB",
+            file_start.elapsed().as_millis(),
+            file_size as f64 / 1_000_000.0
+        );
+
+        let mmap_start = std::time::Instant::now();
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+        println!(
+            "Memory mapping took: {:.2}ms",
+            mmap_start.elapsed().as_millis()
+        );
+
+        let metadata_start = std::time::Instant::now();
         self.metadata = codec.extract_metadata_from_file(input_file)?;
+        println!(
+            "Metadata extraction took: {:.2}ms",
+            metadata_start.elapsed().as_millis()
+        );
+
+        let decode_start = std::time::Instant::now();
         self.buffer = codec.decode(&mapped_file)?;
+        let decode_duration = decode_start.elapsed();
+        println!(
+            "Audio decode took: {:.2}ms ({:.1}MB/s)",
+            decode_duration.as_millis(),
+            file_size as f64 / 1_000_000.0 / decode_duration.as_secs_f64()
+        );
+
         self.codec = Some(codec);
         self.path = PathBuf::from(input_file);
+
+        let total_duration = start_time.elapsed();
+        println!("Total file open took: {:.2}ms", total_duration.as_millis());
         Ok(())
     }
 
@@ -101,7 +141,12 @@ impl Codex {
     }
 
     pub fn resample(&mut self, new_rate: u32) {
+        let start_time = std::time::Instant::now();
         self.buffer.resample(new_rate);
+        println!(
+            "Total resample operation took: {:.2}ms",
+            start_time.elapsed().as_millis()
+        );
     }
 
     pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
@@ -109,20 +154,44 @@ impl Codex {
     }
 
     pub fn export(&self, output_file: &str) -> R<()> {
+        let start_time = std::time::Instant::now();
+
         let temp_file = std::env::temp_dir().join("temp_audio_file");
         let temp_path = temp_file.to_str().unwrap_or("");
 
+        println!("Exporting to: {}", output_file);
+
         match get_codec(output_file) {
             Ok(codec) => {
+                let encode_start = std::time::Instant::now();
                 codec.encode_file(&self.buffer, temp_path)?;
+                println!(
+                    "Audio encode took: {:.2}ms",
+                    encode_start.elapsed().as_millis()
+                );
+
+                let metadata_start = std::time::Instant::now();
                 codec.embed_metadata_to_file(temp_path, &self.metadata)?;
+                println!(
+                    "Metadata embed took: {:.2}ms",
+                    metadata_start.elapsed().as_millis()
+                );
             }
             Err(error) => return Err(error),
         }
 
+        let rename_start = std::time::Instant::now();
         match std::fs::rename(&temp_file, output_file) {
             Ok(_) => {
+                println!(
+                    "File rename took: {:.2}ms",
+                    rename_start.elapsed().as_millis()
+                );
                 println!("Successfully renamed temp file to: {}", output_file);
+                println!(
+                    "Total export took: {:.2}ms",
+                    start_time.elapsed().as_millis()
+                );
                 Ok(())
             }
             Err(e) => {
@@ -148,7 +217,14 @@ impl Codex {
                     Err(e.into()) // Return the original error
                 } else {
                     let _ = std::fs::remove_file(&temp_file); // Try to cleanup
-                    println!("Copy+delete successful");
+                    println!(
+                        "Copy+delete successful, took: {:.2}ms",
+                        rename_start.elapsed().as_millis()
+                    );
+                    println!(
+                        "Total export took: {:.2}ms",
+                        start_time.elapsed().as_millis()
+                    );
                     Ok(())
                 }
             }

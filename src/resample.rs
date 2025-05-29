@@ -1,4 +1,8 @@
+use rayon::prelude::*;
+use std::collections::HashMap;
 use std::f32::consts::PI;
+use std::sync::OnceLock;
+use wide::f32x4;
 
 /// Sinc function: sin(πx) / (πx)
 fn sinc(x: f32) -> f32 {
@@ -34,6 +38,108 @@ fn generate_kernel(pos: f32, kernel_size: usize, cutoff: f32) -> Vec<f32> {
     }
 
     kernel
+}
+
+// Add a struct to cache kernels
+struct KernelCache {
+    kernels: HashMap<u32, Vec<f32>>,
+    kernel_size: usize,
+    cutoff: f32,
+}
+
+impl KernelCache {
+    fn new(kernel_size: usize, cutoff: f32) -> Self {
+        Self {
+            kernels: HashMap::new(),
+            kernel_size,
+            cutoff,
+        }
+    }
+
+    fn get_kernel(&mut self, frac_fixed: u32) -> &Vec<f32> {
+        if !self.kernels.contains_key(&frac_fixed) {
+            let frac = frac_fixed as f32 / 65536.0; // Convert from fixed point
+            let kernel = generate_kernel_optimized(frac, self.kernel_size, self.cutoff);
+            self.kernels.insert(frac_fixed, kernel);
+        }
+        &self.kernels[&frac_fixed]
+    }
+}
+
+// Pre-computed lookup table for sinc values
+const SINC_TABLE_SIZE: usize = 8192;
+static SINC_TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+static HANN_TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+
+/// Fast sinc function using lookup table
+fn sinc_fast(x: f32) -> f32 {
+    let table = SINC_TABLE.get_or_init(|| {
+        let mut sinc_table = Vec::with_capacity(SINC_TABLE_SIZE);
+        for i in 0..SINC_TABLE_SIZE {
+            let x = (i as f32) / (SINC_TABLE_SIZE as f32) * 16.0 - 8.0; // Range: -8 to 8
+            sinc_table.push(sinc_direct(x));
+        }
+        sinc_table
+    });
+
+    let abs_x = x.abs();
+    if abs_x >= 8.0 {
+        return 0.0; // Beyond useful range
+    }
+
+    let index = ((abs_x + 8.0) / 16.0 * (SINC_TABLE_SIZE as f32)).min((SINC_TABLE_SIZE - 1) as f32)
+        as usize;
+    table[index]
+}
+
+/// Fast Hann window using lookup table
+fn hann_window_fast(n: usize, length: usize) -> f32 {
+    let table = HANN_TABLE.get_or_init(|| {
+        let mut hann_table = Vec::with_capacity(SINC_TABLE_SIZE);
+        for i in 0..SINC_TABLE_SIZE {
+            // Hann window for range [0, 1]
+            let n = (i as f32) / (SINC_TABLE_SIZE as f32 - 1.0);
+            hann_table.push(0.5 * (1.0 - (2.0 * PI * n).cos()));
+        }
+        hann_table
+    });
+
+    let normalized = (n as f32) / ((length - 1) as f32);
+    let index =
+        (normalized * ((SINC_TABLE_SIZE - 1) as f32)).min((SINC_TABLE_SIZE - 1) as f32) as usize;
+    table[index]
+}
+
+/// Optimized kernel generation with lookup tables
+fn generate_kernel_optimized(pos: f32, kernel_size: usize, cutoff: f32) -> Vec<f32> {
+    let mut kernel = Vec::with_capacity(kernel_size);
+    let half = kernel_size as isize / 2;
+
+    for i in -half..half {
+        let t = i as f32 - pos;
+        let window = hann_window_fast((i + half) as usize, kernel_size);
+        kernel.push(sinc_fast(t * cutoff) * window);
+    }
+
+    // Normalize to preserve amplitude
+    let sum: f32 = kernel.iter().sum();
+    if sum != 0.0 {
+        let inv_sum = 1.0 / sum;
+        for val in kernel.iter_mut() {
+            *val *= inv_sum;
+        }
+    }
+
+    kernel
+}
+
+// Direct sinc calculation (for table generation)
+fn sinc_direct(x: f32) -> f32 {
+    if x.abs() < 1e-6 {
+        1.0
+    } else {
+        (PI * x).sin() / (PI * x)
+    }
 }
 
 /// Resample a mono f32 buffer from `src_rate` to `dst_rate`
@@ -246,4 +352,258 @@ pub fn convert_from_pcm_bytes(input: &[u8], bit_depth: u32) -> Vec<f32> {
     }
 
     output
+}
+
+/// Highly optimized resample function with multiple improvements
+pub fn resample_windowed_sinc_optimized(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    let ratio = dst_rate as f32 / src_rate as f32;
+    let output_len = ((input.len() as f32) * ratio).ceil() as usize;
+
+    let kernel_size = 32;
+    let cutoff = 0.9_f32.min(1.0 / ratio);
+
+    // Pre-allocate output buffer
+    let mut output = Vec::with_capacity(output_len);
+    output.resize(output_len, 0.0);
+
+    // Use kernel caching for common fractional positions
+    let mut cache = KernelCache::new(kernel_size, cutoff);
+
+    // Process in chunks for better cache locality
+    const CHUNK_SIZE: usize = 256;
+
+    for chunk_start in (0..output_len).step_by(CHUNK_SIZE) {
+        let chunk_end = (chunk_start + CHUNK_SIZE).min(output_len);
+
+        for i in chunk_start..chunk_end {
+            let src_pos = i as f32 / ratio;
+            let src_index = src_pos.floor();
+            let frac = src_pos - src_index;
+
+            // Use fixed-point for kernel cache key
+            let frac_fixed = (frac * 65536.0) as u32;
+            let kernel = cache.get_kernel(frac_fixed);
+
+            let mut sample = 0.0;
+            let start_idx = src_index as isize - (kernel_size as isize / 2);
+
+            // Vectorized inner loop with bounds checking optimized out
+            for (j, &k) in kernel.iter().enumerate() {
+                let idx = start_idx + j as isize;
+                if idx >= 0 && (idx as usize) < input.len() {
+                    sample += input[idx as usize] * k;
+                }
+            }
+
+            output[i] = sample;
+        }
+    }
+
+    output
+}
+
+/// SIMD-optimized convolution for the inner loop
+fn convolve_simd(input: &[f32], kernel: &[f32], start_idx: isize) -> f32 {
+    let mut sum = f32x4::ZERO;
+    let kernel_len = kernel.len();
+
+    // Process 4 samples at a time
+    let simd_len = (kernel_len / 4) * 4; // Use explicit division and multiplication
+
+    for i in (0..simd_len).step_by(4) {
+        let idx_base = start_idx + i as isize;
+
+        // Load 4 kernel coefficients
+        let k = f32x4::new([kernel[i], kernel[i + 1], kernel[i + 2], kernel[i + 3]]);
+
+        // Load 4 input samples (with bounds checking)
+        let mut samples = [0.0f32; 4];
+        for j in 0..4 {
+            let idx = idx_base + j as isize;
+            if idx >= 0 && (idx as usize) < input.len() {
+                samples[j] = input[idx as usize];
+            }
+        }
+        let s = f32x4::new(samples);
+
+        // Multiply and accumulate
+        sum += k * s;
+    }
+
+    // Handle remaining samples
+    let mut scalar_sum = sum.reduce_add();
+    for i in simd_len..kernel_len {
+        let idx = start_idx + i as isize;
+        if idx >= 0 && (idx as usize) < input.len() {
+            scalar_sum += input[idx as usize] * kernel[i];
+        }
+    }
+
+    scalar_sum
+}
+
+/// Parallel SIMD-optimized resample function
+pub fn resample_parallel_simd(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    let ratio = dst_rate as f32 / src_rate as f32;
+    let output_len = ((input.len() as f32) * ratio).ceil() as usize;
+
+    let kernel_size = 32;
+    let cutoff = 0.9_f32.min(1.0 / ratio);
+
+    // Pre-allocate output buffer
+    let mut output = vec![0.0f32; output_len];
+
+    // Process in parallel chunks
+    const CHUNK_SIZE: usize = 1024;
+
+    output
+        .par_chunks_mut(CHUNK_SIZE)
+        .enumerate()
+        .for_each(|(chunk_idx, chunk)| {
+            let chunk_start = chunk_idx * CHUNK_SIZE;
+            let mut cache = KernelCache::new(kernel_size, cutoff);
+
+            for (local_idx, sample_out) in chunk.iter_mut().enumerate() {
+                let i = chunk_start + local_idx;
+                if i >= output_len {
+                    break;
+                }
+
+                let src_pos = i as f32 / ratio;
+                let src_index = src_pos.floor();
+                let frac = src_pos - src_index;
+
+                // Use fixed-point for kernel cache key
+                let frac_fixed = (frac * 65536.0) as u32;
+                let kernel = cache.get_kernel(frac_fixed);
+
+                // Use SIMD-optimized convolution
+                let start_idx = src_index as isize - (kernel_size as isize / 2);
+                *sample_out = convolve_simd(input, kernel, start_idx);
+            }
+        });
+
+    output
+}
+
+/// Ultra-fast resample for specific common ratios (2:1, 1:2, etc.)
+pub fn resample_fast_common_ratios(
+    input: &[f32],
+    src_rate: u32,
+    dst_rate: u32,
+) -> Option<Vec<f32>> {
+    let ratio = dst_rate as f64 / src_rate as f64;
+
+    // Handle exact 2:1 downsampling
+    if (ratio - 0.5).abs() < 0.001 {
+        return Some(resample_downsample_2x(input));
+    }
+
+    // Handle exact 1:2 upsampling
+    if (ratio - 2.0).abs() < 0.001 {
+        return Some(resample_upsample_2x(input));
+    }
+
+    // Handle exact 1:1 (no resampling needed)
+    if (ratio - 1.0).abs() < 0.001 {
+        return Some(input.to_vec());
+    }
+
+    None // Fall back to general algorithm
+}
+
+/// Optimized 2x downsampling with anti-aliasing
+fn resample_downsample_2x(input: &[f32]) -> Vec<f32> {
+    let output_len = input.len() / 2;
+    let mut output = Vec::with_capacity(output_len);
+
+    // Simple anti-aliasing filter coefficients for 2x downsampling
+    const FILTER: [f32; 5] = [0.1, 0.2, 0.4, 0.2, 0.1];
+
+    for i in 0..output_len {
+        let src_idx = i * 2;
+        let mut sample = 0.0;
+
+        for (j, &coeff) in FILTER.iter().enumerate() {
+            let idx = src_idx + j;
+            if idx >= 2 && idx < input.len() {
+                sample += input[idx - 2] * coeff;
+            }
+        }
+
+        output.push(sample);
+    }
+
+    output
+}
+
+/// Optimized 2x upsampling with interpolation
+fn resample_upsample_2x(input: &[f32]) -> Vec<f32> {
+    let output_len = input.len() * 2;
+    let mut output = Vec::with_capacity(output_len);
+
+    for i in 0..input.len() {
+        output.push(input[i]);
+
+        // Linear interpolation for the inserted sample
+        if i + 1 < input.len() {
+            output.push((input[i] + input[i + 1]) * 0.5);
+        } else {
+            output.push(input[i]);
+        }
+    }
+
+    output
+}
+
+/// Main optimized resample function that chooses the best algorithm
+pub fn resample_optimized(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f32> {
+    // Try fast path for common ratios first
+    if let Some(result) = resample_fast_common_ratios(input, src_rate, dst_rate) {
+        return result;
+    }
+
+    // For large inputs, use parallel processing
+    if input.len() > 10000 {
+        resample_parallel_simd(input, src_rate, dst_rate)
+    } else {
+        // Use single-threaded optimized version for smaller inputs
+        resample_windowed_sinc_optimized(input, src_rate, dst_rate)
+    }
+}
+
+/// Benchmark different resample algorithms
+pub fn benchmark_resample_algorithms(input: &[f32], src_rate: u32, dst_rate: u32) {
+    use std::time::Instant;
+
+    println!(
+        "Benchmarking resample algorithms for {}Hz -> {}Hz ({} samples)",
+        src_rate,
+        dst_rate,
+        input.len()
+    );
+
+    // Original algorithm
+    let start = Instant::now();
+    let _result1 = resample_windowed_sinc(input, src_rate, dst_rate);
+    let time1 = start.elapsed();
+    println!("Original algorithm: {:?}", time1);
+
+    // Optimized algorithm
+    let start = Instant::now();
+    let _result2 = resample_optimized(input, src_rate, dst_rate);
+    let time2 = start.elapsed();
+    println!("Optimized algorithm: {:?}", time2);
+
+    // Parallel SIMD algorithm
+    let start = Instant::now();
+    let _result3 = resample_parallel_simd(input, src_rate, dst_rate);
+    let time3 = start.elapsed();
+    println!("Parallel SIMD algorithm: {:?}", time3);
+
+    let speedup2 = time1.as_nanos() as f64 / time2.as_nanos() as f64;
+    let speedup3 = time1.as_nanos() as f64 / time3.as_nanos() as f64;
+
+    println!("Optimized speedup: {:.2}x", speedup2);
+    println!("Parallel SIMD speedup: {:.2}x", speedup3);
 }
