@@ -31,6 +31,20 @@ const I24_SIGN_BIT: i32 = 0x800000;
 const I24_SIGN_EXTENSION_MASK: i32 = !0xFFFFFF;
 const BYTE_MASK: i32 = 0xFF; // Mask for extracting a single byte
 
+pub fn debug_println(args: std::fmt::Arguments) {
+    if cfg!(debug_assertions) {
+        println!("{}", args);
+    }
+}
+
+// Helper macro to use it like println!
+#[macro_export]
+macro_rules! dprintln {
+    ($($arg:tt)*) => {
+        $crate::debug_println(format_args!($($arg)*));
+    };
+}
+
 pub fn clean_multi_mono(path: &str) -> R<()> {
     let mut c = Codex::new(path);
     c.convert_dual_mono()?;
@@ -43,8 +57,8 @@ pub fn get_fingerprint(path: &str) -> R<String> {
     match codex.open(path) {
         Ok(_) => codex.get_chromaprint_fingerprint(),
         Err(e) => {
-            println!("Failed to Open");
-            println!("Error: {}", e);
+            dprintln!("Failed to Open");
+            dprintln!("Error: {}", e);
             Ok("FAILED".to_string())
         }
     }
@@ -120,7 +134,7 @@ impl Codex {
                 if output_file.to_lowercase().ends_with(".wv") {
                     // Extract metadata chunks for WavPack
                     if let Metadata::Wav(chunks) = &self.metadata {
-                        println!(
+                        dprintln!(
                             "🎯 Codex export: WavPack detected with {} metadata chunks",
                             chunks.len()
                         );
@@ -129,25 +143,28 @@ impl Codex {
                         for (i, chunk) in chunks.iter().enumerate() {
                             match chunk {
                                 MetadataChunk::TextTag { key, .. } => {
-                                    println!(
+                                    dprintln!(
                                         "🎯 Codex export: Passing chunk [{}] TextTag: {}",
-                                        i, key
+                                        i,
+                                        key
                                     );
                                 }
                                 MetadataChunk::Picture { description, .. } => {
-                                    println!(
+                                    dprintln!(
                                         "🎯 Codex export: Passing chunk [{}] Picture: {}",
-                                        i, description
+                                        i,
+                                        description
                                     );
                                 }
                                 MetadataChunk::Unknown { id, .. } => {
-                                    println!(
+                                    dprintln!(
                                         "🎯 Codex export: Passing chunk [{}] Unknown: {}",
-                                        i, id
+                                        i,
+                                        id
                                     );
                                 }
                                 _ => {
-                                    println!(
+                                    dprintln!(
                                         "🎯 Codex export: Passing chunk [{}] Other: {}",
                                         i,
                                         chunk.id()
@@ -162,7 +179,7 @@ impl Codex {
                             codec.embed_metadata_chunks(&encoded_audio, chunks)?;
                         std::fs::write(temp_path, encoded_with_metadata)?;
                     } else {
-                        println!("🎯 Codex export: WavPack detected but no WAV metadata to embed");
+                        dprintln!("🎯 Codex export: WavPack detected but no WAV metadata to embed");
                         // No metadata to embed, just encode normally
                         codec.encode_file(&self.buffer, temp_path)?;
                     }

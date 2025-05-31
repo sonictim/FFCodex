@@ -1,3 +1,4 @@
+pub use crate::dprintln; // Make the macro available
 pub use crate::*;
 pub use anyhow::{Result as R, anyhow};
 pub use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};

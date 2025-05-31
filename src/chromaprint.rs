@@ -7,7 +7,7 @@ impl Codex {
         // This is fine since your implementation checks internally
 
         if self.buffer.format.bits_per_sample() > 24 {
-            println!(
+            dprintln!(
                 "{} bit depth is not supported. Converting to 24bit",
                 self.get_filename()
             );
@@ -32,7 +32,7 @@ impl Codex {
             .any(|ch| ch.len() >= MIN_SAMPLES_PER_CHANNEL);
 
         if !has_enough_samples {
-            println!("Audio is too short for Chromaprint, using PCM hash instead");
+            dprintln!("Audio is too short for Chromaprint, using PCM hash instead");
             return self.generate_pcm_hash();
         }
 
@@ -51,14 +51,14 @@ impl Codex {
             c.finish();
 
             // if let Some(fingerprint) = c.get_fingerprint() {
-            //     println!(
+            //     dprintln!(
             //         "Success! Generated Chromaprint fingerprint for: {}",
             //         self.get_filename()
             //     );
             //     return Ok(fingerprint);
             // }
             if let Some(fingerprint) = c.get_raw_fingerprint() {
-                println!(
+                dprintln!(
                     "Generated raw fingerprint for: {} size; {}",
                     self.get_filename(),
                     fingerprint.len()
@@ -105,7 +105,7 @@ impl Codex {
         }
 
         let hash = hasher.finalize();
-        println!("Success! Generated PCM hash for: {}", self.get_filename());
+        dprintln!("Success! Generated PCM hash for: {}", self.get_filename());
         let fingerprint = format!("PCM:{}", general_purpose::STANDARD.encode(hash));
         Ok(fingerprint)
     }

@@ -49,26 +49,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wv_codec = WvCodec;
     let encoded_data = wv_codec.encode(&audio_buffer)?;
     fs::write("test_no_metadata.wv", &encoded_data)?;
-    println!("Created test_no_metadata.wv ({} bytes)", encoded_data.len());
+    dprintln!("Created test_no_metadata.wv ({} bytes)", encoded_data.len());
     
     // Now embed metadata
     let final_data = wv_codec.embed_metadata_chunks(&encoded_data, &metadata.chunks())?;
     fs::write("test_with_metadata.wv", &final_data)?;
-    println!("Created test_with_metadata.wv ({} bytes)", final_data.len());
+    dprintln!("Created test_with_metadata.wv ({} bytes)", final_data.len());
     
     // Verify the metadata in the final file
     let extracted_metadata = wv_codec.extract_metadata_chunks(&final_data)?;
-    println!("Extracted {} metadata chunks from final file:", extracted_metadata.len());
+    dprintln!("Extracted {} metadata chunks from final file:", extracted_metadata.len());
     for chunk in &extracted_metadata {
         match chunk {
             MetadataChunk::TextTag { key, value } => {
-                println!("  Text tag: {} = {}", key, value);
+                dprintln!("  Text tag: {} = {}", key, value);
             }
             MetadataChunk::Picture { mime_type, description, data } => {
-                println!("  Picture: {} ({}) - {} bytes", description, mime_type, data.len());
+                dprintln!("  Picture: {} ({}) - {} bytes", description, mime_type, data.len());
             }
             _ => {
-                println!("  Other: {}", chunk.id());
+                dprintln!("  Other: {}", chunk.id());
             }
         }
     }
