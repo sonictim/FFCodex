@@ -120,12 +120,49 @@ impl Codex {
                 if output_file.to_lowercase().ends_with(".wv") {
                     // Extract metadata chunks for WavPack
                     if let Metadata::Wav(chunks) = &self.metadata {
+                        println!(
+                            "🎯 Codex export: WavPack detected with {} metadata chunks",
+                            chunks.len()
+                        );
+
+                        // Show the order of chunks being passed to the codec
+                        for (i, chunk) in chunks.iter().enumerate() {
+                            match chunk {
+                                MetadataChunk::TextTag { key, .. } => {
+                                    println!(
+                                        "🎯 Codex export: Passing chunk [{}] TextTag: {}",
+                                        i, key
+                                    );
+                                }
+                                MetadataChunk::Picture { description, .. } => {
+                                    println!(
+                                        "🎯 Codex export: Passing chunk [{}] Picture: {}",
+                                        i, description
+                                    );
+                                }
+                                MetadataChunk::Unknown { id, .. } => {
+                                    println!(
+                                        "🎯 Codex export: Passing chunk [{}] Unknown: {}",
+                                        i, id
+                                    );
+                                }
+                                _ => {
+                                    println!(
+                                        "🎯 Codex export: Passing chunk [{}] Other: {}",
+                                        i,
+                                        chunk.id()
+                                    );
+                                }
+                            }
+                        }
+
                         // Create a dummy input buffer to use with embed_metadata_chunks
                         let encoded_audio = codec.encode(&self.buffer)?;
                         let encoded_with_metadata =
                             codec.embed_metadata_chunks(&encoded_audio, chunks)?;
                         std::fs::write(temp_path, encoded_with_metadata)?;
                     } else {
+                        println!("🎯 Codex export: WavPack detected but no WAV metadata to embed");
                         // No metadata to embed, just encode normally
                         codec.encode_file(&self.buffer, temp_path)?;
                     }

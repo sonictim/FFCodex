@@ -208,9 +208,11 @@ impl WavpackDecoder {
     pub fn extract_metadata(&self) -> R<Vec<MetadataChunk>> {
         let mut chunks = Vec::new();
 
+        println!("🔍 WavPack EXTRACTION: Starting metadata extraction...");
+
         // Extract text tags
         let num_tags = unsafe { WavpackGetNumTagItems(self.context) };
-        println!("WavPack: Found {} text tag items", num_tags);
+        println!("🔍 WavPack EXTRACTION: Found {} text tag items", num_tags);
 
         for i in 0..num_tags {
             let mut item_buffer = vec![0u8; 256];
@@ -249,7 +251,12 @@ impl WavpackDecoder {
                         .unwrap_or(value_buffer.len());
                     let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
                     if !item_name.is_empty() && !value.is_empty() {
-                        println!("WavPack: Found text tag: {} = {}", item_name, value);
+                        println!(
+                            "🔍 WavPack EXTRACTION: [CHUNK {}] Text tag: {} = {}",
+                            chunks.len(),
+                            item_name,
+                            value
+                        );
                         chunks.push(MetadataChunk::TextTag {
                             key: item_name,
                             value,
@@ -261,7 +268,10 @@ impl WavpackDecoder {
 
         // Extract binary tags (like album art)
         let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(self.context) };
-        println!("WavPack: Found {} binary tag items", num_binary_tags);
+        println!(
+            "🔍 WavPack EXTRACTION: Found {} binary tag items",
+            num_binary_tags
+        );
 
         for i in 0..num_binary_tags {
             let mut item_buffer = vec![0u8; 256];
@@ -302,12 +312,26 @@ impl WavpackDecoder {
                         || item_name.to_lowercase().contains("apic")
                     {
                         let mime_type = Self::detect_image_mime_type(&data_buffer);
+                        println!(
+                            "🔍 WavPack EXTRACTION: [CHUNK {}] Picture: {} ({} bytes) - {}",
+                            chunks.len(),
+                            item_name,
+                            data_buffer.len(),
+                            mime_type
+                        );
 
                         chunks.push(MetadataChunk::Picture {
                             mime_type,
                             description: item_name.clone(),
                             data: data_buffer.clone(),
                         });
+                    } else {
+                        println!(
+                            "🔍 WavPack EXTRACTION: [CHUNK {}] Binary: {} ({} bytes)",
+                            chunks.len(),
+                            item_name,
+                            data_buffer.len()
+                        );
                     }
 
                     chunks.push(MetadataChunk::Unknown {
@@ -326,10 +350,46 @@ impl WavpackDecoder {
                 let wrapper_slice =
                     unsafe { std::slice::from_raw_parts(wrapper_data, wrapper_bytes as usize) };
 
+                println!(
+                    "🔍 WavPack EXTRACTION: [CHUNK {}] Wrapper data ({} bytes)",
+                    chunks.len(),
+                    wrapper_bytes
+                );
                 chunks.push(MetadataChunk::Unknown {
                     id: "WV_WRAPPER".to_string(),
                     data: wrapper_slice.to_vec(),
                 });
+            }
+        }
+
+        println!(
+            "🔍 WavPack EXTRACTION: ✅ Completed! Total chunks extracted: {}",
+            chunks.len()
+        );
+        for (i, chunk) in chunks.iter().enumerate() {
+            match chunk {
+                MetadataChunk::TextTag { key, .. } => {
+                    println!(
+                        "🔍 WavPack EXTRACTION: Final order [{}] TextTag: {}",
+                        i, key
+                    );
+                }
+                MetadataChunk::Picture { description, .. } => {
+                    println!(
+                        "🔍 WavPack EXTRACTION: Final order [{}] Picture: {}",
+                        i, description
+                    );
+                }
+                MetadataChunk::Unknown { id, .. } => {
+                    println!("🔍 WavPack EXTRACTION: Final order [{}] Unknown: {}", i, id);
+                }
+                _ => {
+                    println!(
+                        "🔍 WavPack EXTRACTION: Final order [{}] Other: {}",
+                        i,
+                        chunk.id()
+                    );
+                }
             }
         }
 
@@ -489,9 +549,34 @@ impl WavpackEncoder {
         }
 
         println!(
-            "WavPack add_metadata: Adding {} metadata chunks to encoder...",
+            "📝 WavPack EMBEDDING: Starting to add {} metadata chunks to encoder...",
             chunks.len()
         );
+
+        // First, show the order we're receiving the chunks
+        for (i, chunk) in chunks.iter().enumerate() {
+            match chunk {
+                MetadataChunk::TextTag { key, .. } => {
+                    println!("📝 WavPack EMBEDDING: Input order [{}] TextTag: {}", i, key);
+                }
+                MetadataChunk::Picture { description, .. } => {
+                    println!(
+                        "📝 WavPack EMBEDDING: Input order [{}] Picture: {}",
+                        i, description
+                    );
+                }
+                MetadataChunk::Unknown { id, .. } => {
+                    println!("📝 WavPack EMBEDDING: Input order [{}] Unknown: {}", i, id);
+                }
+                _ => {
+                    println!(
+                        "📝 WavPack EMBEDDING: Input order [{}] Other: {}",
+                        i,
+                        chunk.id()
+                    );
+                }
+            }
+        }
 
         for (i, chunk) in chunks.iter().enumerate() {
             match chunk {
@@ -510,13 +595,13 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: [{}] Added text tag '{}' = '{}', result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added text tag '{}' = '{}', result: {}",
                         i, key, value, result
                     );
 
                     if result != 1 {
                         println!(
-                            "WavPack add_metadata: WARNING - Failed to add text tag '{}', result: {}",
+                            "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add text tag '{}', result: {}",
                             key, result
                         );
                     }
@@ -546,7 +631,7 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: [{}] Added picture '{}' ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added picture '{}' ({} bytes), result: {}",
                         i,
                         description,
                         data.len(),
@@ -555,7 +640,7 @@ impl WavpackEncoder {
 
                     if result != 1 {
                         println!(
-                            "WavPack add_metadata: WARNING - Failed to add picture '{}', result: {}",
+                            "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add picture '{}', result: {}",
                             description, result
                         );
                     }
@@ -571,7 +656,8 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: Added BEXT ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added BEXT ({} bytes), result: {}",
+                        i,
                         data.len(),
                         result
                     );
@@ -591,7 +677,8 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: Added iXML ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added iXML ({} bytes), result: {}",
+                        i,
                         xml.len(),
                         result
                     );
@@ -608,7 +695,8 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: Added Soundminer ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added Soundminer ({} bytes), result: {}",
+                        i,
                         data.len(),
                         result
                     );
@@ -624,7 +712,8 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: Added ID3 ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added ID3 ({} bytes), result: {}",
+                        i,
                         data.len(),
                         result
                     );
@@ -640,14 +729,31 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: Added APE ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added APE ({} bytes), result: {}",
+                        i,
                         data.len(),
                         result
                     );
                 }
                 MetadataChunk::Unknown { id, data } => {
+                    // Strip "WV_" prefix if present to avoid duplication during round-trip
+                    let item_name = if id.starts_with("WV_") {
+                        &id[3..] // Remove "WV_" prefix
+                    } else {
+                        id.as_str()
+                    };
+
+                    // Skip WRAPPER data as WavPack handles this natively through its wrapper system
+                    if item_name.eq_ignore_ascii_case("WRAPPER") {
+                        println!(
+                            "📝 WavPack EMBEDDING: [{}] ⏭️  Skipping '{}' - handled natively by WavPack wrapper system",
+                            i, id
+                        );
+                        continue;
+                    }
+
                     let c_item =
-                        CString::new(id.as_str()).map_err(|_| anyhow!("Invalid item name"))?;
+                        CString::new(item_name).map_err(|_| anyhow!("Invalid item name"))?;
                     let result = unsafe {
                         WavpackAppendBinaryTagItem(
                             self.context,
@@ -657,16 +763,17 @@ impl WavpackEncoder {
                         )
                     };
                     println!(
-                        "WavPack add_metadata: [{}] Added unknown '{}' ({} bytes), result: {}",
+                        "📝 WavPack EMBEDDING: [{}] ✅ Added unknown '{}' -> '{}' ({} bytes), result: {}",
                         i,
                         id,
+                        item_name,
                         data.len(),
                         result
                     );
 
                     if result != 1 {
                         println!(
-                            "WavPack add_metadata: WARNING - Failed to add unknown '{}', result: {}",
+                            "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add unknown '{}', result: {}",
                             id, result
                         );
                     }
@@ -675,11 +782,11 @@ impl WavpackEncoder {
         }
 
         // Verify metadata was added by trying to read it back
-        println!("WavPack add_metadata: Verifying metadata was added to context...");
+        println!("📝 WavPack EMBEDDING: Verifying metadata was added to context...");
         let num_tags = unsafe { WavpackGetNumTagItems(self.context) };
         let num_binary = unsafe { WavpackGetNumBinaryTagItems(self.context) };
         println!(
-            "WavPack add_metadata: Context now has {} text tags and {} binary tags",
+            "📝 WavPack EMBEDDING: ✅ Context now has {} text tags and {} binary tags",
             num_tags, num_binary
         );
 
@@ -964,21 +1071,52 @@ impl Codec for WvCodec {
 
     fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>> {
         println!(
-            "WavPack embed_metadata_chunks: Called with {} chunks",
+            "🔄 WavPack embed_metadata_chunks: Called with {} chunks",
             chunks.len()
         );
 
+        // Show the order of chunks we're receiving
+        for (i, chunk) in chunks.iter().enumerate() {
+            match chunk {
+                MetadataChunk::TextTag { key, .. } => {
+                    println!(
+                        "🔄 WavPack embed_metadata_chunks: Input order [{}] TextTag: {}",
+                        i, key
+                    );
+                }
+                MetadataChunk::Picture { description, .. } => {
+                    println!(
+                        "🔄 WavPack embed_metadata_chunks: Input order [{}] Picture: {}",
+                        i, description
+                    );
+                }
+                MetadataChunk::Unknown { id, .. } => {
+                    println!(
+                        "🔄 WavPack embed_metadata_chunks: Input order [{}] Unknown: {}",
+                        i, id
+                    );
+                }
+                _ => {
+                    println!(
+                        "🔄 WavPack embed_metadata_chunks: Input order [{}] Other: {}",
+                        i,
+                        chunk.id()
+                    );
+                }
+            }
+        }
+
         // For WavPack, we need to decode, add metadata, and re-encode
         if chunks.is_empty() {
-            println!("WavPack embed_metadata_chunks: No chunks, returning original data");
+            println!("🔄 WavPack embed_metadata_chunks: No chunks, returning original data");
             return Ok(input.to_vec());
         }
 
-        println!("WavPack embed_metadata_chunks: Decoding audio buffer...");
+        println!("🔄 WavPack embed_metadata_chunks: Decoding audio buffer...");
         // First, decode the WavPack file to get the audio data
         let audio_buffer = self.decode(input)?;
 
-        println!("WavPack embed_metadata_chunks: Creating encoder...");
+        println!("🔄 WavPack embed_metadata_chunks: Creating encoder...");
         // Create a new encoder with the same parameters
         let sample_rate = audio_buffer.sample_rate;
         let channels = audio_buffer.channels;
@@ -998,15 +1136,18 @@ impl Codec for WvCodec {
 
         encoder.init()?;
 
-        println!("WavPack embed_metadata_chunks: Encoding with metadata...");
+        println!("🔄 WavPack embed_metadata_chunks: Encoding with metadata...");
         // Encode with the metadata using the WavpackEncoder method directly
         let result = encoder.encode(&audio_buffer, total_samples, Some(chunks));
         match &result {
             Ok(data) => println!(
-                "WavPack embed_metadata_chunks: Successfully encoded {} bytes",
+                "🔄 WavPack embed_metadata_chunks: ✅ Successfully encoded {} bytes",
                 data.len()
             ),
-            Err(e) => println!("WavPack embed_metadata_chunks: Encoding failed: {}", e),
+            Err(e) => println!(
+                "🔄 WavPack embed_metadata_chunks: ❌ Encoding failed: {}",
+                e
+            ),
         }
         result
     }
