@@ -1,5 +1,5 @@
 // pub mod decode;
-mod codecs;
+pub mod codecs;
 use std::path::PathBuf;
 
 use codecs::*;
@@ -8,6 +8,7 @@ use crate::prelude::*;
 mod chromaprint;
 pub mod chromaprint_bindings;
 pub mod resample;
+pub mod wavpack_bindings;
 
 // Standard bit depths
 const BIT_DEPTH_8: u16 = 8;
@@ -114,8 +115,25 @@ impl Codex {
 
         match get_codec(output_file) {
             Ok(codec) => {
-                codec.encode_file(&self.buffer, temp_path)?;
-                codec.embed_metadata_to_file(temp_path, &self.metadata)?;
+                // For WavPack files, we need to encode with metadata included during encoding
+                // to avoid the issue where encode_file overwrites metadata
+                if output_file.to_lowercase().ends_with(".wv") {
+                    // Extract metadata chunks for WavPack
+                    if let Metadata::Wav(chunks) = &self.metadata {
+                        // Create a dummy input buffer to use with embed_metadata_chunks
+                        let encoded_audio = codec.encode(&self.buffer)?;
+                        let encoded_with_metadata =
+                            codec.embed_metadata_chunks(&encoded_audio, chunks)?;
+                        std::fs::write(temp_path, encoded_with_metadata)?;
+                    } else {
+                        // No metadata to embed, just encode normally
+                        codec.encode_file(&self.buffer, temp_path)?;
+                    }
+                } else {
+                    // For other formats, use the original approach
+                    codec.encode_file(&self.buffer, temp_path)?;
+                    codec.embed_metadata_to_file(temp_path, &self.metadata)?;
+                }
             }
             Err(error) => return Err(error),
         }

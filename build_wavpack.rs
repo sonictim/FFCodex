@@ -48,6 +48,9 @@ pub fn build() {
         "src/pack_dsd.c",
         "src/pack_floats.c",
         "src/pack_utils.c",
+        "src/pack_dns.c",         // Dynamic noise shaping functions
+        "src/tags.c",             // Tag/metadata functions
+        "src/tag_utils.c",        // Tag utility functions
     ];
 
     // Add source files to the build

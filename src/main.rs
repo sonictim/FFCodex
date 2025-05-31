@@ -20,17 +20,21 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif";
+    let input_file = "/Users/tfarrell/Desktop/subset test/THND_Fstorm_LUD018.159_shorter.wv";
 
     // println!("Input file: {}", input_file);
 
-    let _fp = get_fingerprint(input_file)?;
-    // println!("Fingerprint: {}", fp);
+    let fp = get_fingerprint(input_file)?;
+    println!("Fingerprint: {}", fp);
 
-    // let elapsed_time = start_time.elapsed();
-    // println!("Finished in {} seconds", elapsed_time.as_secs_f32());
+    let elapsed_time = start_time.elapsed();
+    println!(
+        "Finished fingerprinting  in {} seconds",
+        elapsed_time.as_secs_f32()
+    );
+
     let output_file =
-        "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR 2.aif";
+        "/Users/tfarrell/Desktop/subset test/THND_Fstorm_LUD018.159_shorter_stripped.wv";
 
     // // flac_debug(input_file)?;
 
@@ -42,7 +46,12 @@ fn main() -> R<()> {
     // clean_multi_mono(input_file)?;
 
     let elapsed_time = start_time.elapsed();
-    println!("Finished in {} seconds", elapsed_time.as_secs_f32());
+    println!(
+        "Finished dual mono conversion in {} seconds",
+        elapsed_time.as_secs_f32()
+    );
+
+    let _c = Codex::new(output_file);
 
     // flac_debug(output_file)?;
 

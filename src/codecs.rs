@@ -3,12 +3,12 @@ mod aif;
 mod flac;
 // mod mp3;
 mod wav;
-// mod wavpack;
+mod wavpack;
 pub use aif::AifCodec;
 pub use flac::FlacCodec;
 // pub use mp3::Mp3Codec;
 pub use wav::WavCodec;
-// pub use wavpack::*;
+pub use wavpack::WvCodec;
 
 pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
     let extension = std::path::Path::new(file_path)
@@ -21,6 +21,7 @@ pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
         "flac" => Ok(Box::new(FlacCodec)),
         "aif" => Ok(Box::new(AifCodec)),
         "aiff" => Ok(Box::new(AifCodec)),
+        "wv" => Ok(Box::new(WvCodec)),
         // "mp3" => Ok(Box::new(Mp3Codec)),
         _ => Err(anyhow::anyhow!(
             "No codec found for extension: {}",

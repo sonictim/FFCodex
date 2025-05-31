@@ -7,7 +7,10 @@ impl Codex {
         // This is fine since your implementation checks internally
 
         if self.buffer.format.bits_per_sample() > 24 {
-            println!("{} bith depth is not supported", self.get_filename());
+            println!(
+                "{} bit depth is not supported. Converting to 24bit",
+                self.get_filename()
+            );
             self.change_bit_depth(24)
         }
 
