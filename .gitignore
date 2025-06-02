@@ -1,10 +1,27 @@
+# Build artifacts
 /target
 /vendor
+
 # Allow resources directory but exclude certain files
 # /resources
+
+# Object files and libraries
 *.o
 *.obj
 *.dll
 *.so
 *.dylib
+
+# System files
 .DS_Store
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak

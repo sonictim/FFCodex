@@ -6,21 +6,38 @@ pub fn build() {
     // Output directory for our compiled library
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // Clone WavPack repository if not already present
-    let wavpack_dir = out_dir.join("wavpack");
-    if !wavpack_dir.exists() {
-        println!("cargo:warning=Cloning WavPack repository...");
-        let status = Command::new("git")
-            .args(&[
-                "clone",
-                "https://github.com/dbry/WavPack.git",
-                wavpack_dir.to_str().unwrap(),
-            ])
-            .status()
-            .expect("Failed to clone WavPack repository");
+    // Try to use local vendor directory first, then fall back to downloading
+    let local_wavpack_dir = PathBuf::from("vendor/wavpack-src");
+    let wavpack_dir = if local_wavpack_dir.exists()
+        && local_wavpack_dir.join("include/wavpack.h").exists()
+    {
+        println!("cargo:warning=Using local WavPack source from vendor directory");
+        local_wavpack_dir
+    } else {
+        // Clone WavPack repository if not already present
+        let downloaded_dir = out_dir.join("wavpack");
+        if !downloaded_dir.exists() {
+            println!("cargo:warning=Cloning WavPack repository...");
+            let status = Command::new("git")
+                .args(&[
+                    "clone",
+                    "--depth", "1", // Shallow clone for faster downloads
+                    "https://github.com/dbry/WavPack.git",
+                    downloaded_dir.to_str().unwrap(),
+                ])
+                .status()
+                .expect("Failed to clone WavPack repository. Make sure git is installed and you have internet access.");
 
-        assert!(status.success(), "Failed to clone WavPack repository");
-    }
+            assert!(status.success(), "Failed to clone WavPack repository");
+
+            // Verify the clone was successful by checking for key files
+            let header_file = downloaded_dir.join("include/wavpack.h");
+            if !header_file.exists() {
+                panic!("WavPack clone appears incomplete - missing include/wavpack.h");
+            }
+        }
+        downloaded_dir
+    };
 
     // Compile WavPack source
     let mut config = cc::Build::new();

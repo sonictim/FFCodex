@@ -22,7 +22,7 @@ impl Codex {
 
         self.resample(sample_rate);
 
-        const MIN_SAMPLES_PER_CHANNEL: usize = 24000; // 0.5 seconds at 48kHz per channel
+        const MIN_SAMPLES_PER_CHANNEL: usize = 144000; // 3 seconds at 48kHz per channel
 
         // Check if we have enough samples in any channel
         let has_enough_samples = self
