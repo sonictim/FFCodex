@@ -66,7 +66,12 @@ pub fn get_fingerprint(path: &str) -> R<String> {
 
 #[derive(Debug)]
 pub enum Metadata {
-    Wav(Vec<MetadataChunk>),
+    // Chunk-based formats (WAV, AIFF, WavPack) all use the same structure
+    // since they share similar metadata chunk architectures
+    Wav(Vec<MetadataChunk>), // Also used for AIFF and WavPack
+
+    // FLAC has a unique metadata structure with Vorbis comments,
+    // picture blocks, etc. that doesn't map well to chunks
     Flac(metaflac::Tag),
 }
 

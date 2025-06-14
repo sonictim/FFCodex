@@ -1,3 +1,6 @@
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+
 //! WavPack FFI bindings for FFCodex
 //!
 //! This module provides comprehensive Rust bindings for the WavPack audio compression library.
