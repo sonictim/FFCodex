@@ -306,7 +306,8 @@ impl Codec for WavCodec {
                                 let sample_rate = cursor.read_u32::<LittleEndian>()?;
                                 dprintln!(
                                     "Sample rate: {} Hz, Format tag: {}",
-                                    sample_rate, format_tag
+                                    sample_rate,
+                                    format_tag
                                 );
 
                                 // Don't need to read further in fmt chunk
@@ -324,6 +325,10 @@ impl Codec for WavCodec {
         }
 
         let chunks = self.extract_metadata_chunks(&mapped_file)?;
+        dprintln!(
+            "extract_file_metadata_chunks - Found {} metadata chunks",
+            chunks.len()
+        );
         Ok(Metadata::Wav(chunks))
     }
 
@@ -688,7 +693,9 @@ fn decode_samples(
 
     dprintln!(
         "Decoding {} channels, {} frames per channel, {} bits per sample",
-        channels, frame_count, bits_per_sample
+        channels,
+        frame_count,
+        bits_per_sample
     );
 
     let output: Vec<Vec<f32>> = (0..channels as usize)

@@ -231,6 +231,32 @@ impl Codex {
             ))
         }
     }
+
+    pub fn parse_metadata(&self) -> R<()> {
+        match &self.metadata {
+            Metadata::Flac(tag) => {
+                dprintln!("Parsing FLAC metadata");
+                if let Some(comments) = tag.vorbis_comments() {
+                    dprintln!("FLAC Vorbis Comments found: {:?}", comments.comments);
+                } else {
+                    dprintln!("No Vorbis Comments found in FLAC metadata");
+                }
+
+                return Ok(());
+            }
+            Metadata::Wav(chunks) => {
+                for chunk in chunks {
+                    // if chunk.id() == "SMED" {
+                    //     dprintln!("{:?}", chunk);
+                    // }
+                    dprintln!("Parsing metadata chunk: {:?}", chunk.id());
+                    let map = chunk.parse()?;
+                    dprintln!("Parsed metadata chunk: {:?}", map);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub trait Codec: Send + Sync {

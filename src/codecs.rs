@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::prelude::*;
 mod aif;
 mod flac;
@@ -170,66 +172,665 @@ impl MetadataChunk {
             MetadataChunk::Unknown { data, .. } => data,
         }
     }
-    pub fn parse(&self) -> R<()> {
-        // Silent parsing - debug prints removed for performance
-        Ok(())
-    }
-
-    pub fn as_text_tags(&self) -> Vec<(String, String)> {
+    pub fn parse(&self) -> R<HashMap<String, String>> {
         match self {
-            Self::IXml(xml) => {
-                let mut tags = Vec::new();
-                for line in xml.lines() {
-                    if let Some(idx) = line.find('=') {
-                        let key = line[0..idx].trim().to_string();
-                        let value = line[idx + 1..].trim().to_string();
-                        tags.push((key, value));
+            Self::Bext(data) => {
+                // Parse BEXT metadata according to BWF specification
+                let mut map = HashMap::new();
+
+                if data.len() < 602 {
+                    // Minimum BEXT chunk size
+                    return Ok(map);
+                }
+
+                // Description: 256 bytes, null-terminated string
+                if data.len() >= 256 {
+                    let description = String::from_utf8_lossy(&data[0..256])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !description.is_empty() {
+                        map.insert("Description".to_string(), description);
                     }
                 }
-                tags
+
+                // Originator: 32 bytes, null-terminated string
+                if data.len() >= 288 {
+                    let originator = String::from_utf8_lossy(&data[256..288])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !originator.is_empty() {
+                        map.insert("Originator".to_string(), originator);
+                    }
+                }
+
+                // OriginatorReference: 32 bytes, null-terminated string
+                if data.len() >= 320 {
+                    let orig_ref = String::from_utf8_lossy(&data[288..320])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !orig_ref.is_empty() {
+                        map.insert("OriginatorReference".to_string(), orig_ref);
+                    }
+                }
+
+                // OriginationDate: 10 bytes, format YYYY-MM-DD
+                if data.len() >= 330 {
+                    let date = String::from_utf8_lossy(&data[320..330])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !date.is_empty() {
+                        map.insert("OriginationDate".to_string(), date);
+                    }
+                }
+
+                // OriginationTime: 8 bytes, format HH:MM:SS
+                if data.len() >= 338 {
+                    let time = String::from_utf8_lossy(&data[330..338])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !time.is_empty() {
+                        map.insert("OriginationTime".to_string(), time);
+                    }
+                }
+
+                // TimeReference: 8 bytes, 64-bit integer (little-endian)
+                if data.len() >= 346 {
+                    let time_ref = u64::from_le_bytes([
+                        data[338], data[339], data[340], data[341], data[342], data[343],
+                        data[344], data[345],
+                    ]);
+                    map.insert("TimeReference".to_string(), time_ref.to_string());
+                }
+
+                // Version: 2 bytes, little-endian
+                if data.len() >= 348 {
+                    let version = u16::from_le_bytes([data[346], data[347]]);
+                    map.insert("Version".to_string(), version.to_string());
+                }
+
+                // UMID: 64 bytes
+                if data.len() >= 412 {
+                    let mut umid = String::with_capacity(128); // 64 bytes * 2 hex chars
+                    for &b in &data[348..412] {
+                        umid.push_str(&format!("{:02X}", b));
+                    }
+                    if umid.chars().any(|c| c != '0') {
+                        // Only include if not all zeros
+                        map.insert("UMID".to_string(), umid);
+                    }
+                }
+
+                // LoudnessValue: 2 bytes, little-endian (signed)
+                if data.len() >= 414 {
+                    let loudness = i16::from_le_bytes([data[412], data[413]]);
+                    if loudness != 0 {
+                        // Only include if not zero (which means not set)
+                        map.insert("LoudnessValue".to_string(), loudness.to_string());
+                    }
+                }
+
+                // LoudnessRange: 2 bytes, little-endian
+                if data.len() >= 416 {
+                    let loudness_range = u16::from_le_bytes([data[414], data[415]]);
+                    if loudness_range != 0 {
+                        map.insert("LoudnessRange".to_string(), loudness_range.to_string());
+                    }
+                }
+
+                // MaxTruePeakLevel: 2 bytes, little-endian (signed)
+                if data.len() >= 418 {
+                    let max_peak = i16::from_le_bytes([data[416], data[417]]);
+                    if max_peak != 0 {
+                        map.insert("MaxTruePeakLevel".to_string(), max_peak.to_string());
+                    }
+                }
+
+                // MaxMomentaryLoudness: 2 bytes, little-endian (signed)
+                if data.len() >= 420 {
+                    let max_momentary = i16::from_le_bytes([data[418], data[419]]);
+                    if max_momentary != 0 {
+                        map.insert(
+                            "MaxMomentaryLoudness".to_string(),
+                            max_momentary.to_string(),
+                        );
+                    }
+                }
+
+                // MaxShortTermLoudness: 2 bytes, little-endian (signed)
+                if data.len() >= 422 {
+                    let max_short_term = i16::from_le_bytes([data[420], data[421]]);
+                    if max_short_term != 0 {
+                        map.insert(
+                            "MaxShortTermLoudness".to_string(),
+                            max_short_term.to_string(),
+                        );
+                    }
+                }
+
+                // Reserved: 180 bytes (skip)
+
+                // CodingHistory: remaining bytes, null-terminated string
+                if data.len() > 602 {
+                    let coding_history = String::from_utf8_lossy(&data[602..])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !coding_history.is_empty() {
+                        map.insert("CodingHistory".to_string(), coding_history);
+                    }
+                }
+
+                Ok(map)
             }
-            Self::TextTag { key, value } => {
-                vec![(key.clone(), value.clone())]
+            Self::IXml(xml) => {
+                // Parse iXML metadata using proper XML parsing
+                use quick_xml::{Reader, events::Event};
+
+                let mut map = HashMap::new();
+                let mut reader = Reader::from_str(xml);
+                reader.config_mut().trim_text(true);
+
+                let mut buf = Vec::new();
+                let mut current_path = Vec::new();
+                let mut current_text = String::new();
+
+                loop {
+                    match reader.read_event_into(&mut buf) {
+                        Ok(Event::Start(ref e)) => {
+                            let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                            current_path.push(name);
+                            current_text.clear();
+                        }
+                        Ok(Event::End(ref e)) => {
+                            let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                            if let Some(last) = current_path.last() {
+                                if last == &name && !current_text.trim().is_empty() {
+                                    // Create a key from the path
+                                    let key = if current_path.len() > 1 {
+                                        format!("{}_{}", current_path[current_path.len() - 2], name)
+                                    } else {
+                                        name.clone()
+                                    };
+                                    map.insert(key, current_text.trim().to_string());
+                                }
+                            }
+                            current_path.pop();
+                            current_text.clear();
+                        }
+                        Ok(Event::Text(ref e)) => {
+                            if let Ok(text) = e.unescape() {
+                                current_text.push_str(&text);
+                            }
+                        }
+                        Ok(Event::Eof) => break,
+                        Err(_) => {
+                            // If XML parsing fails, fall back to simple parsing
+                            for line in xml.lines() {
+                                if let Some(idx) = line.find('=') {
+                                    let key = line[0..idx].trim().to_string();
+                                    let value = line[idx + 1..].trim().to_string();
+                                    map.insert(key, value);
+                                }
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                    buf.clear();
+                }
+
+                Ok(map)
             }
-            _ => Vec::new(),
+
+            Self::ID3(data) => {
+                // Parse ID3 tags (supports ID3v1 and ID3v2.x)
+                let mut map = HashMap::new();
+
+                if data.is_empty() {
+                    return Ok(map);
+                }
+
+                // Check for ID3v2 tag (starts with "ID3")
+                if data.len() >= 10 && &data[0..3] == b"ID3" {
+                    // ID3v2 header: "ID3" + version (2 bytes) + flags (1 byte) + size (4 bytes syncsafe)
+                    let version_major = data[3];
+                    let version_minor = data[4];
+                    let _flags = data[5]; // Flags byte (currently unused)
+
+                    // Parse syncsafe integer (7 bits per byte, MSB is always 0)
+                    let size = ((data[6] as u32) << 21)
+                        | ((data[7] as u32) << 14)
+                        | ((data[8] as u32) << 7)
+                        | (data[9] as u32);
+
+                    map.insert(
+                        "ID3Version".to_string(),
+                        format!("2.{}.{}", version_major, version_minor),
+                    );
+
+                    if size > 0 && data.len() >= (10 + size as usize) {
+                        let tag_data = &data[10..(10 + size as usize)];
+
+                        // Parse frames based on version
+                        match version_major {
+                            2 => self.parse_id3v22_frames(tag_data, &mut map),
+                            3 | 4 => {
+                                self.parse_id3v23_v24_frames(tag_data, &mut map, version_major)
+                            }
+                            _ => {} // Unsupported version
+                        }
+                    }
+                }
+                // Check for ID3v1 tag (last 128 bytes, starts with "TAG")
+                else if data.len() >= 128 && &data[data.len() - 128..data.len() - 125] == b"TAG" {
+                    let tag_start = data.len() - 128;
+
+                    // Title: 30 bytes
+                    let title = String::from_utf8_lossy(&data[tag_start + 3..tag_start + 33])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !title.is_empty() {
+                        map.insert("Title".to_string(), title);
+                    }
+
+                    // Artist: 30 bytes
+                    let artist = String::from_utf8_lossy(&data[tag_start + 33..tag_start + 63])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !artist.is_empty() {
+                        map.insert("Artist".to_string(), artist);
+                    }
+
+                    // Album: 30 bytes
+                    let album = String::from_utf8_lossy(&data[tag_start + 63..tag_start + 93])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !album.is_empty() {
+                        map.insert("Album".to_string(), album);
+                    }
+
+                    // Year: 4 bytes
+                    let year = String::from_utf8_lossy(&data[tag_start + 93..tag_start + 97])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !year.is_empty() {
+                        map.insert("Year".to_string(), year);
+                    }
+
+                    // Comment: 28 or 30 bytes (depends on if track number is present)
+                    let comment_end = if data[tag_start + 125] == 0 && data[tag_start + 126] != 0 {
+                        // ID3v1.1 with track number
+                        let track = data[tag_start + 126];
+                        if track != 0 {
+                            map.insert("Track".to_string(), track.to_string());
+                        }
+                        tag_start + 125
+                    } else {
+                        // ID3v1 without track number
+                        tag_start + 127
+                    };
+
+                    let comment = String::from_utf8_lossy(&data[tag_start + 97..comment_end])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    if !comment.is_empty() {
+                        map.insert("Comment".to_string(), comment);
+                    }
+
+                    // Genre: 1 byte (index into predefined list)
+                    let genre_byte = data[tag_start + 127];
+                    if let Some(genre) = self.get_id3v1_genre(genre_byte) {
+                        map.insert("Genre".to_string(), genre);
+                    }
+
+                    map.insert("ID3Version".to_string(), "1.0".to_string());
+                }
+
+                Ok(map)
+            }
+            _ => Ok(HashMap::new()),
+            // Self::Soundminer(data) => {
+            //     // Soundminer parsing logic (if needed)
+            //     Ok(HashMap::new())
+            // }
+            // Self::ID3(data) => {
+            //     // ID3 parsing logic (if needed)
+            //     Ok(HashMap::new())
+            // }
+            // Self::APE(data) => {
+            //     // APE parsing logic (if needed)
+            //     Ok(HashMap::new())
+            // }
+            // Self::Picture { .. } => Ok(HashMap::new()),
+            // Self::TextTag { key, value } => {
+            //     let mut map = HashMap::new();
+            //     map.insert(key.clone(), value.clone());
+            //     Ok(map)
+            // }
+            // Self::Unknown { id, data } => {
+            //     let mut map = HashMap::new();
+            //     map.insert(id.clone(), String::from_utf8_lossy(data).to_string());
+            //     Ok(map)
+            // }
         }
     }
 
-    pub fn to_format(&self, format: &str) -> Option<MetadataChunk> {
-        match (self, format) {
-            (Self::IXml(_), "mp3") => {
-                let _ = self.as_text_tags();
-                Some(Self::ID3(Vec::new()))
+    // Helper methods for ID3 parsing
+    fn parse_id3v22_frames(&self, data: &[u8], map: &mut HashMap<String, String>) {
+        let mut offset = 0;
+        while offset + 6 <= data.len() {
+            // ID3v2.2 frame header: 3-byte ID + 3-byte size
+            let frame_id = String::from_utf8_lossy(&data[offset..offset + 3]).to_string();
+            let frame_size = ((data[offset + 3] as usize) << 16)
+                | ((data[offset + 4] as usize) << 8)
+                | (data[offset + 5] as usize);
+
+            if frame_size == 0 || offset + 6 + frame_size > data.len() {
+                break;
             }
-            (Self::ID3(_), "wav" | "flac") => Some(Self::IXml(String::new())),
-            (
-                Self::Picture {
-                    mime_type,
-                    description,
-                    data,
-                },
-                _,
-            ) => Some(Self::Picture {
-                mime_type: mime_type.clone(),
-                description: description.clone(),
-                data: data.clone(),
-            }),
+
+            let frame_data = &data[offset + 6..offset + 6 + frame_size];
+
+            // Parse common text frames
+            if let Some(key) = self.get_id3v22_frame_name(&frame_id) {
+                if let Some(text) = self.parse_text_frame(frame_data) {
+                    map.insert(key, text);
+                }
+            }
+
+            offset += 6 + frame_size;
+        }
+    }
+
+    fn parse_id3v23_v24_frames(&self, data: &[u8], map: &mut HashMap<String, String>, version: u8) {
+        let mut offset = 0;
+        while offset + 10 <= data.len() {
+            // ID3v2.3/2.4 frame header: 4-byte ID + 4-byte size + 2-byte flags
+            let frame_id = String::from_utf8_lossy(&data[offset..offset + 4]).to_string();
+
+            let frame_size = if version == 4 {
+                // ID3v2.4 uses syncsafe integers for frame size
+                ((data[offset + 4] as usize) << 21)
+                    | ((data[offset + 5] as usize) << 14)
+                    | ((data[offset + 6] as usize) << 7)
+                    | (data[offset + 7] as usize)
+            } else {
+                // ID3v2.3 uses regular integers
+                ((data[offset + 4] as usize) << 24)
+                    | ((data[offset + 5] as usize) << 16)
+                    | ((data[offset + 6] as usize) << 8)
+                    | (data[offset + 7] as usize)
+            };
+
+            if frame_size == 0 || offset + 10 + frame_size > data.len() {
+                break;
+            }
+
+            let frame_data = &data[offset + 10..offset + 10 + frame_size];
+
+            // Parse common text frames
+            if let Some(key) = self.get_id3v23_v24_frame_name(&frame_id) {
+                if let Some(text) = self.parse_text_frame(frame_data) {
+                    map.insert(key, text);
+                }
+            }
+
+            offset += 10 + frame_size;
+        }
+    }
+
+    fn parse_text_frame(&self, data: &[u8]) -> Option<String> {
+        if data.is_empty() {
+            return None;
+        }
+
+        // First byte is text encoding
+        let encoding = data[0];
+        let text_data = &data[1..];
+
+        let text = match encoding {
+            0 => {
+                // ISO-8859-1
+                String::from_utf8_lossy(text_data).to_string()
+            }
+            1 => {
+                // UTF-16 with BOM
+                if text_data.len() >= 2 {
+                    let bom = u16::from_be_bytes([text_data[0], text_data[1]]);
+                    let (text_bytes, is_be) = if bom == 0xFEFF {
+                        (&text_data[2..], true)
+                    } else if bom == 0xFFFE {
+                        (&text_data[2..], false)
+                    } else {
+                        (text_data, true) // Default to big-endian
+                    };
+
+                    self.decode_utf16(text_bytes, is_be)
+                } else {
+                    String::new()
+                }
+            }
+            2 => {
+                // UTF-16BE without BOM
+                self.decode_utf16(text_data, true)
+            }
+            3 => {
+                // UTF-8
+                String::from_utf8_lossy(text_data).to_string()
+            }
+            _ => {
+                // Unknown encoding, try UTF-8
+                String::from_utf8_lossy(text_data).to_string()
+            }
+        };
+
+        let trimmed = text.trim_end_matches('\0').trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    fn decode_utf16(&self, data: &[u8], big_endian: bool) -> String {
+        let mut result = String::new();
+        let mut i = 0;
+
+        while i + 1 < data.len() {
+            let code_unit = if big_endian {
+                u16::from_be_bytes([data[i], data[i + 1]])
+            } else {
+                u16::from_le_bytes([data[i], data[i + 1]])
+            };
+
+            if code_unit == 0 {
+                break; // Null terminator
+            }
+
+            // Handle surrogate pairs for characters outside BMP
+            if (0xD800..=0xDBFF).contains(&code_unit) && i + 3 < data.len() {
+                let low_surrogate = if big_endian {
+                    u16::from_be_bytes([data[i + 2], data[i + 3]])
+                } else {
+                    u16::from_le_bytes([data[i + 2], data[i + 3]])
+                };
+
+                if (0xDC00..=0xDFFF).contains(&low_surrogate) {
+                    let code_point = 0x10000u32
+                        + (((code_unit as u32) & 0x3FF) << 10)
+                        + ((low_surrogate as u32) & 0x3FF);
+                    if let Some(ch) = char::from_u32(code_point) {
+                        result.push(ch);
+                    }
+                    i += 4;
+                    continue;
+                }
+            }
+
+            if let Some(ch) = char::from_u32(code_unit as u32) {
+                result.push(ch);
+            }
+            i += 2;
+        }
+
+        result
+    }
+
+    fn get_id3v22_frame_name(&self, frame_id: &str) -> Option<String> {
+        match frame_id {
+            "TT2" => Some("Title".to_string()),
+            "TP1" => Some("Artist".to_string()),
+            "TAL" => Some("Album".to_string()),
+            "TYE" => Some("Year".to_string()),
+            "TCO" => Some("Genre".to_string()),
+            "TRK" => Some("Track".to_string()),
+            "COM" => Some("Comment".to_string()),
+            "TP2" => Some("AlbumArtist".to_string()),
+            "TT1" => Some("ContentGroup".to_string()),
+            "TT3" => Some("Subtitle".to_string()),
+            "TP3" => Some("Conductor".to_string()),
+            "TP4" => Some("ModifiedBy".to_string()),
+            "TCM" => Some("Composer".to_string()),
             _ => None,
         }
     }
 
-    pub fn new_text_tag(key: &str, value: &str) -> Self {
-        Self::TextTag {
-            key: key.to_string(),
-            value: value.to_string(),
+    fn get_id3v23_v24_frame_name(&self, frame_id: &str) -> Option<String> {
+        match frame_id {
+            "TIT2" => Some("Title".to_string()),
+            "TPE1" => Some("Artist".to_string()),
+            "TALB" => Some("Album".to_string()),
+            "TYER" | "TDRC" => Some("Year".to_string()), // TYER in v2.3, TDRC in v2.4
+            "TCON" => Some("Genre".to_string()),
+            "TRCK" => Some("Track".to_string()),
+            "COMM" => Some("Comment".to_string()),
+            "TPE2" => Some("AlbumArtist".to_string()),
+            "TIT1" => Some("ContentGroup".to_string()),
+            "TIT3" => Some("Subtitle".to_string()),
+            "TPE3" => Some("Conductor".to_string()),
+            "TPE4" => Some("ModifiedBy".to_string()),
+            "TCOM" => Some("Composer".to_string()),
+            "TPOS" => Some("DiscNumber".to_string()),
+            "TBPM" => Some("BPM".to_string()),
+            "TKEY" => Some("InitialKey".to_string()),
+            "TLAN" => Some("Language".to_string()),
+            "TLEN" => Some("Length".to_string()),
+            "TMED" => Some("MediaType".to_string()),
+            "TOAL" => Some("OriginalAlbum".to_string()),
+            "TOFN" => Some("OriginalFilename".to_string()),
+            "TOLY" => Some("OriginalLyricist".to_string()),
+            "TOPE" => Some("OriginalArtist".to_string()),
+            "TORY" => Some("OriginalYear".to_string()),
+            "TOWN" => Some("FileOwner".to_string()),
+            "TPUB" => Some("Publisher".to_string()),
+            "TRDA" => Some("RecordingDates".to_string()),
+            "TRSN" => Some("InternetRadioName".to_string()),
+            "TRSO" => Some("InternetRadioOwner".to_string()),
+            "TSIZ" => Some("Size".to_string()),
+            "TSRC" => Some("ISRC".to_string()),
+            "TSSE" => Some("EncodingSettings".to_string()),
+            _ => None,
         }
     }
 
-    pub fn new_picture(mime_type: &str, description: &str, data: &[u8]) -> Self {
-        Self::Picture {
-            mime_type: mime_type.to_string(),
-            description: description.to_string(),
-            data: data.to_vec(),
+    fn get_id3v1_genre(&self, genre_byte: u8) -> Option<String> {
+        let genres = [
+            "Blues",
+            "Classic Rock",
+            "Country",
+            "Dance",
+            "Disco",
+            "Funk",
+            "Grunge",
+            "Hip-Hop",
+            "Jazz",
+            "Metal",
+            "New Age",
+            "Oldies",
+            "Other",
+            "Pop",
+            "R&B",
+            "Rap",
+            "Reggae",
+            "Rock",
+            "Techno",
+            "Industrial",
+            "Alternative",
+            "Ska",
+            "Death Metal",
+            "Pranks",
+            "Soundtrack",
+            "Euro-Techno",
+            "Ambient",
+            "Trip-Hop",
+            "Vocal",
+            "Jazz+Funk",
+            "Fusion",
+            "Trance",
+            "Classical",
+            "Instrumental",
+            "Acid",
+            "House",
+            "Game",
+            "Sound Clip",
+            "Gospel",
+            "Noise",
+            "Alternative Rock",
+            "Bass",
+            "Soul",
+            "Punk",
+            "Space",
+            "Meditative",
+            "Instrumental Pop",
+            "Instrumental Rock",
+            "Ethnic",
+            "Gothic",
+            "Darkwave",
+            "Techno-Industrial",
+            "Electronic",
+            "Pop-Folk",
+            "Eurodance",
+            "Dream",
+            "Southern Rock",
+            "Comedy",
+            "Cult",
+            "Gangsta",
+            "Top 40",
+            "Christian Rap",
+            "Pop/Funk",
+            "Jungle",
+            "Native US",
+            "Cabaret",
+            "New Wave",
+            "Psychadelic",
+            "Rave",
+            "Showtunes",
+            "Trailer",
+            "Lo-Fi",
+            "Tribal",
+            "Acid Punk",
+            "Acid Jazz",
+            "Polka",
+            "Retro",
+            "Musical",
+            "Rock & Roll",
+            "Hard Rock",
+        ];
+
+        if (genre_byte as usize) < genres.len() {
+            Some(genres[genre_byte as usize].to_string())
+        } else {
+            None
         }
     }
 }
