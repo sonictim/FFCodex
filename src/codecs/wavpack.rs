@@ -371,13 +371,15 @@ impl WavpackDecoder {
                 MetadataChunk::TextTag { key, .. } => {
                     dprintln!(
                         "🔍 WavPack EXTRACTION: Final order [{}] TextTag: {}",
-                        i, key
+                        i,
+                        key
                     );
                 }
                 MetadataChunk::Picture { description, .. } => {
                     dprintln!(
                         "🔍 WavPack EXTRACTION: Final order [{}] Picture: {}",
-                        i, description
+                        i,
+                        description
                     );
                 }
                 MetadataChunk::Unknown { id, .. } => {
@@ -562,7 +564,8 @@ impl WavpackEncoder {
                 MetadataChunk::Picture { description, .. } => {
                     dprintln!(
                         "📝 WavPack EMBEDDING: Input order [{}] Picture: {}",
-                        i, description
+                        i,
+                        description
                     );
                 }
                 MetadataChunk::Unknown { id, .. } => {
@@ -596,13 +599,17 @@ impl WavpackEncoder {
                     };
                     dprintln!(
                         "📝 WavPack EMBEDDING: [{}] ✅ Added text tag '{}' = '{}', result: {}",
-                        i, key, value, result
+                        i,
+                        key,
+                        value,
+                        result
                     );
 
                     if result != 1 {
                         dprintln!(
                             "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add text tag '{}', result: {}",
-                            key, result
+                            key,
+                            result
                         );
                     }
                 }
@@ -641,7 +648,8 @@ impl WavpackEncoder {
                     if result != 1 {
                         dprintln!(
                             "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add picture '{}', result: {}",
-                            description, result
+                            description,
+                            result
                         );
                     }
                 }
@@ -747,7 +755,8 @@ impl WavpackEncoder {
                     if item_name.eq_ignore_ascii_case("WRAPPER") {
                         dprintln!(
                             "📝 WavPack EMBEDDING: [{}] ⏭️  Skipping '{}' - handled natively by WavPack wrapper system",
-                            i, id
+                            i,
+                            id
                         );
                         continue;
                     }
@@ -774,7 +783,8 @@ impl WavpackEncoder {
                     if result != 1 {
                         dprintln!(
                             "📝 WavPack EMBEDDING: ⚠️  WARNING - Failed to add unknown '{}', result: {}",
-                            id, result
+                            id,
+                            result
                         );
                     }
                 }
@@ -787,7 +797,8 @@ impl WavpackEncoder {
         let num_binary = unsafe { WavpackGetNumBinaryTagItems(self.context) };
         dprintln!(
             "📝 WavPack EMBEDDING: ✅ Context now has {} text tags and {} binary tags",
-            num_tags, num_binary
+            num_tags,
+            num_binary
         );
 
         Ok(())
@@ -889,7 +900,8 @@ impl WavpackEncoder {
         let final_binary_tags = unsafe { WavpackGetNumBinaryTagItems(self.context) };
         dprintln!(
             "WavPack encode: Final verification - context has {} text tags and {} binary tags",
-            final_text_tags, final_binary_tags
+            final_text_tags,
+            final_binary_tags
         );
 
         Ok(self.output_buffer.clone())
@@ -971,7 +983,10 @@ impl Codec for WvCodec {
         decoder.decode()
     }
 
-    fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
+    fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
+        let Some(buffer) = buffer else {
+            return Err(anyhow!("Cannot encode None AudioBuffer"));
+        };
         // Validate input buffer
         if buffer.data.is_empty() || buffer.data[0].is_empty() {
             return Err(anyhow!("Empty audio buffer provided"));
@@ -1018,7 +1033,10 @@ impl Codec for WvCodec {
         decoder.extract_metadata()
     }
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
+        let Some(metadata) = metadata else {
+            return Err(anyhow!("No metadata provided to embed"));
+        };
         let chunks = match metadata {
             Metadata::Wav(chunks) => chunks,
             _ => return Err(anyhow!("Unsupported metadata format for WavPack")),
@@ -1033,7 +1051,9 @@ impl Codec for WvCodec {
                 MetadataChunk::TextTag { key, value } => {
                     dprintln!(
                         "WavPack embed_metadata_to_file: Chunk {}: TextTag {}={}",
-                        i, key, value
+                        i,
+                        key,
+                        value
                     );
                 }
                 MetadataChunk::Picture {
@@ -1064,7 +1084,8 @@ impl Codec for WvCodec {
         std::fs::write(file_path, new_data)?;
         dprintln!(
             "WavPack embed_metadata_to_file: Successfully wrote {} bytes to {}",
-            data_len, file_path
+            data_len,
+            file_path
         );
         Ok(())
     }
@@ -1081,19 +1102,22 @@ impl Codec for WvCodec {
                 MetadataChunk::TextTag { key, .. } => {
                     dprintln!(
                         "🔄 WavPack embed_metadata_chunks: Input order [{}] TextTag: {}",
-                        i, key
+                        i,
+                        key
                     );
                 }
                 MetadataChunk::Picture { description, .. } => {
                     dprintln!(
                         "🔄 WavPack embed_metadata_chunks: Input order [{}] Picture: {}",
-                        i, description
+                        i,
+                        description
                     );
                 }
                 MetadataChunk::Unknown { id, .. } => {
                     dprintln!(
                         "🔄 WavPack embed_metadata_chunks: Input order [{}] Unknown: {}",
-                        i, id
+                        i,
+                        id
                     );
                 }
                 _ => {

@@ -4,45 +4,56 @@ use base64::{Engine as _, engine::general_purpose};
 
 impl Codex {
     pub fn get_chromaprint_fingerprint(&mut self) -> R<String> {
-        // This is fine since your implementation checks internally
+        let Some(buffer) = self.buffer.take() else {
+            return Err(anyhow::anyhow!(
+                "No audio buffer available for fingerprinting"
+            ));
+        };
 
-        if self.buffer.format.bits_per_sample() > 24 {
+        if buffer.format.bits_per_sample() > 24 {
             dprintln!(
                 "{} bit depth is not supported. Converting to 24bit",
                 self.get_filename()
             );
-            self.change_bit_depth(24)
+            self.change_bit_depth(24)?
         }
 
-        let sample_rate = if self.buffer.sample_rate == 44100 {
+        let sample_rate = if buffer.sample_rate == 44100 {
             44100
         } else {
             48000
         };
 
-        self.resample(sample_rate);
+        self.buffer = Some(buffer); // Restore the buffer
+        self.resample(sample_rate)?;
+        let Some(buffer) = self.buffer.take() else {
+            return Err(anyhow::anyhow!(
+                "No audio buffer available for fingerprinting"
+            ));
+        };
 
         const MIN_SAMPLES_PER_CHANNEL: usize = 144000; // 3 seconds at 48kHz per channel
 
-        // Check if we have enough samples in any channel
-        let has_enough_samples = self
-            .buffer
+        let has_enough_samples = buffer
             .data
             .iter()
             .any(|ch| ch.len() >= MIN_SAMPLES_PER_CHANNEL);
 
         if !has_enough_samples {
             dprintln!("Audio is too short for Chromaprint, using PCM hash instead");
+            self.buffer = Some(buffer); // Restore the buffer
             return self.generate_pcm_hash();
         }
 
-        let num_channels = if self.buffer.channels > 1 { 2 } else { 1 };
+        let num_channels = if buffer.channels > 1 { 2 } else { 1 };
 
-        let samples = if self.buffer.channels > 1 {
-            interleave_stereo(&self.buffer.data)
+        let samples = if buffer.channels > 1 {
+            interleave_stereo(&buffer.data)
         } else {
-            single_channel(&self.buffer.data)
+            single_channel(&buffer.data)
         };
+
+        self.buffer = Some(buffer); // Restore the buffer
 
         // Try Chromaprint fingerprinting
         let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT);
@@ -80,10 +91,16 @@ impl Codex {
     fn generate_pcm_hash(&self) -> R<String> {
         use sha2::{Digest, Sha256};
 
-        let samples = if self.buffer.channels > 1 {
-            interleave_stereo(&self.buffer.data)
+        let Some(buffer) = self.buffer.as_ref() else {
+            return Err(anyhow::anyhow!(
+                "No audio buffer available for PCM hash generation"
+            ));
+        };
+
+        let samples = if buffer.channels > 1 {
+            interleave_stereo(&buffer.data)
         } else {
-            single_channel(&self.buffer.data)
+            single_channel(&buffer.data)
         };
 
         if samples.is_empty() {

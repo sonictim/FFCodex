@@ -41,27 +41,19 @@ pub fn debug_println(args: std::fmt::Arguments) {
 #[macro_export]
 macro_rules! dprintln {
     ($($arg:tt)*) => {
-        $crate::debug_println(format_args!($($arg)*));
+        $crate::debug_println(format_args!($($arg)*))
     };
 }
 
 pub fn clean_multi_mono(path: &str) -> R<()> {
-    let mut c = Codex::new(path);
+    let mut c = Codex::open(path)?;
     c.convert_dual_mono()?;
     c.export(path)?;
     Ok(())
 }
 
 pub fn get_fingerprint(path: &str) -> R<String> {
-    let mut codex = Codex::default();
-    match codex.open(path) {
-        Ok(_) => codex.get_chromaprint_fingerprint(),
-        Err(e) => {
-            dprintln!("Failed to Open");
-            dprintln!("Error: {}", e);
-            Ok("FAILED".to_string())
-        }
-    }
+    Codex::new(path)?.decode()?.get_chromaprint_fingerprint()
 }
 
 #[derive(Debug)]
@@ -84,33 +76,67 @@ impl Default for Metadata {
 #[derive(Default)]
 pub struct Codex {
     pub path: PathBuf,
-    pub buffer: AudioBuffer,
-    pub metadata: Metadata,
+    pub buffer: Option<AudioBuffer>,
+    pub metadata: Option<Metadata>,
     pub codec: Option<Box<dyn Codec>>,
-    error: Option<anyhow::Error>,
 }
 
 impl Codex {
-    pub fn new(input_file: &str) -> Self {
-        let mut codex = Self::default();
-        match codex.open(input_file) {
-            Ok(_) => codex,
-            Err(e) => {
-                codex.error = Some(e);
-                codex
-            }
+    pub fn new(input_file: &str) -> R<Self> {
+        let path = PathBuf::from(input_file);
+        if !path.exists() {
+            return Err(anyhow::anyhow!(
+                "Input file does not exist: {}",
+                path.display()
+            ));
         }
+
+        // let mut codex = Self::default();
+        Ok(Self {
+            path,
+            codec: get_codec(input_file).ok(),
+            metadata: None,
+            buffer: None,
+        })
     }
 
-    fn open(&mut self, input_file: &str) -> R<()> {
-        let codec = get_codec(input_file)?;
-        let file = std::fs::File::open(input_file)?;
+    pub fn decode(mut self) -> R<Self> {
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No codec available for decoding audio file: {}",
+                self.path.display()
+            )
+        })?;
+        let file = std::fs::File::open(&self.path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        self.metadata = codec.extract_metadata_from_file(input_file)?;
-        self.buffer = codec.decode(&mapped_file)?;
-        self.codec = Some(codec);
-        self.path = PathBuf::from(input_file);
-        Ok(())
+        self.buffer = Some(codec.decode(&mapped_file)?);
+        Ok(self)
+    }
+
+    pub fn extract_metadata(mut self) -> R<Self> {
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No codec available for extracting metadata from file: {}",
+                self.path.display()
+            )
+        })?;
+        self.metadata = Some(codec.extract_metadata_from_file(self.path.to_str().unwrap())?);
+        Ok(self)
+    }
+
+    // pub fn new(input_file: &str) -> Self {
+    //     let mut codex = Self::default();
+    //     match codex.open(input_file) {
+    //         Ok(_) => codex,
+    //         Err(e) => {
+    //             codex.error = Some(e);
+    //             codex
+    //         }
+    //     }
+    // }
+
+    fn open(input_file: &str) -> R<Self> {
+        Self::new(input_file)?.decode()?.extract_metadata()
     }
 
     pub fn get_filename(&self) -> &str {
@@ -120,12 +146,24 @@ impl Codex {
             .unwrap_or("unknown")
     }
 
-    pub fn resample(&mut self, new_rate: u32) {
-        self.buffer.resample(new_rate);
+    fn resample(&mut self, new_rate: u32) -> R<()> {
+        if let Some(buffer) = &mut self.buffer {
+            buffer.resample(new_rate);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("No audio buffer available for resampling"))
+        }
     }
 
-    pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
-        self.buffer.change_bit_depth(new_bit_depth);
+    fn change_bit_depth(&mut self, new_bit_depth: u16) -> R<()> {
+        if let Some(buffer) = &mut self.buffer {
+            buffer.change_bit_depth(new_bit_depth);
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "No audio buffer available for changing bit depth"
+            ))
+        }
     }
 
     pub fn export(&self, output_file: &str) -> R<()> {
@@ -138,7 +176,7 @@ impl Codex {
                 // to avoid the issue where encode_file overwrites metadata
                 if output_file.to_lowercase().ends_with(".wv") {
                     // Extract metadata chunks for WavPack
-                    if let Metadata::Wav(chunks) = &self.metadata {
+                    if let Some(Metadata::Wav(chunks)) = &self.metadata {
                         dprintln!(
                             "🎯 Codex export: WavPack detected with {} metadata chunks",
                             chunks.len()
@@ -212,18 +250,29 @@ impl Codex {
     }
 
     pub fn convert_dual_mono(&mut self) -> R<()> {
-        self.buffer.strip_multi_mono()?;
+        let Some(buffer) = &mut self.buffer else {
+            return Err(anyhow::anyhow!(
+                "No audio buffer available for dual mono conversion"
+            ));
+        };
+        buffer.strip_multi_mono()?;
 
         Ok(())
     }
 
     // Add helper methods to expose channel information
-    pub fn channels(&self) -> u16 {
-        self.buffer.channels
+    pub fn channels(&self) -> R<u16> {
+        let Some(buffer) = &self.buffer else {
+            return Err(anyhow::anyhow!("No audio buffer available"));
+        };
+        Ok(buffer.channels)
     }
 
-    pub fn data_channels(&self) -> usize {
-        self.buffer.data.len()
+    pub fn data_channels(&self) -> R<usize> {
+        let Some(buffer) = &self.buffer else {
+            return Err(anyhow::anyhow!("No audio buffer available"));
+        };
+        Ok(buffer.data.len())
     }
     pub fn copy_metadata(&self, path: &str) -> R<()> {
         let codec = get_codec(path)?;
@@ -239,7 +288,7 @@ impl Codex {
 
     pub fn parse_metadata(&self) -> R<()> {
         match &self.metadata {
-            Metadata::Flac(tag) => {
+            Some(Metadata::Flac(tag)) => {
                 dprintln!("Parsing FLAC metadata");
                 if let Some(comments) = tag.vorbis_comments() {
                     dprintln!("FLAC Vorbis Comments found: {:?}", comments.comments);
@@ -249,7 +298,7 @@ impl Codex {
 
                 return Ok(());
             }
-            Metadata::Wav(chunks) => {
+            Some(Metadata::Wav(chunks)) => {
                 for chunk in chunks {
                     // if chunk.id() == "SMED" {
                     //     dprintln!("{:?}", chunk);
@@ -258,6 +307,10 @@ impl Codex {
                     let map = chunk.parse()?;
                     dprintln!("Parsed metadata chunk: {:?}", map);
                 }
+            }
+            None => {
+                dprintln!("No metadata available to parse");
+                return Ok(());
             }
         }
         Ok(())
@@ -268,9 +321,9 @@ pub trait Codec: Send + Sync {
     fn validate_file_format(&self, data: &[u8]) -> R<()>;
     fn file_extension(&self) -> &'static str;
 
-    fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>>;
+    fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>>;
 
-    fn encode_file(&self, buffer: &AudioBuffer, file_path: &str) -> R<()> {
+    fn encode_file(&self, buffer: &Option<AudioBuffer>, file_path: &str) -> R<()> {
         let encoded_data = self.encode(buffer)?;
         std::fs::write(file_path, encoded_data)?;
         Ok(())
@@ -303,5 +356,5 @@ pub trait Codec: Send + Sync {
 
     fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>>;
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()>;
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()>;
 }

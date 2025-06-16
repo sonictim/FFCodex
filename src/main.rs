@@ -21,18 +21,18 @@ fn main() -> R<()> {
     // };
 
     let input_file =
-        "/Users/tfarrell/Desktop/DUAL MONO IDEAS/GLASBr_StaccatoGlassSmash_SD_STRM30355.flac";
+        "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR 2.aif";
 
-    // println!("Input file: {}", input_file);
+    println!("Input file: {}", input_file);
 
-    // let fp = get_fingerprint(input_file)?;
-    // println!("Fingerprint: {}", fp);
+    let fp = get_fingerprint(input_file)?;
+    println!("Fingerprint: {}", fp);
 
-    // let elapsed_time = start_time.elapsed();
-    // println!(
-    //     "Finished fingerprinting  in {} seconds",
-    //     elapsed_time.as_secs_f32()
-    // );
+    let elapsed_time = start_time.elapsed();
+    println!(
+        "Finished fingerprinting  in {} seconds",
+        elapsed_time.as_secs_f32()
+    );
 
     // let output_file =
     //     "/Users/tfarrell/Desktop/subset test/THND_Fstorm_LUD018.159_shorter_stripped.wv";
@@ -41,8 +41,9 @@ fn main() -> R<()> {
 
     // let start_time = std::time::Instant::now();
 
-    let mut c = Codex::new(input_file);
-    c.parse_metadata()?;
+    Codex::new(input_file)?
+        .extract_metadata()?
+        .parse_metadata()?;
     // c.convert_dual_mono()?;
     // c.export(output_file)?;
     // clean_multi_mono(input_file)?;

@@ -1,3 +1,5 @@
+use claxon::metadata;
+
 use crate::prelude::*;
 
 // Format tags
@@ -191,7 +193,10 @@ impl Codec for WavCodec {
         })
     }
 
-    fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
+    fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
+        let Some(buffer) = buffer else {
+            return Err(anyhow!("Cannot encode None AudioBuffer"));
+        };
         let mut output = Cursor::new(Vec::new());
 
         // Ensure channel count in buffer is consistent with data
@@ -419,7 +424,10 @@ impl Codec for WavCodec {
         Ok(chunks)
     }
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
+        let Some(metadata) = metadata else {
+            return Err(anyhow!("No metadata provided for embedding"));
+        };
         let chunks = match metadata {
             Metadata::Wav(chunks) => chunks,
             _ => return Err(anyhow!("Unsupported metadata format")),

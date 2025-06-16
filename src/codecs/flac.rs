@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use claxon::FlacReader;
+use claxon::{FlacReader, metadata};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use metaflac::{Block, Tag};
@@ -182,7 +182,10 @@ impl Codec for FlacCodec {
             data: audio_data,
         })
     }
-    fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
+    fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
+        let Some(buffer) = buffer else {
+            return Err(anyhow!("Cannot encode None AudioBuffer"));
+        };
         // Get audio parameters
         let bits_per_sample = get_bits_per_sample(buffer.format);
         let channels = buffer.channels as usize;
@@ -419,7 +422,10 @@ impl Codec for FlacCodec {
         Ok(chunks)
     }
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
+        let Some(metadata) = metadata else {
+            return Err(anyhow!("Cannot embed None Metadata"));
+        };
         let source_tag = match metadata {
             Metadata::Flac(tag) => tag,
             _ => return Err(anyhow!("Unsupported metadata format")),

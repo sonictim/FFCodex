@@ -54,8 +54,12 @@ impl Codec for AifCodec {
         Ok(())
     }
 
-    fn encode(&self, buffer: &AudioBuffer) -> R<Vec<u8>> {
+    fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
         let mut output = Cursor::new(Vec::new());
+
+        let Some(buffer) = buffer else {
+            return Err(anyhow!("Cannot encode None AudioBuffer"));
+        };
 
         // Validate input buffer
         if buffer.data.is_empty() {
@@ -395,7 +399,10 @@ impl Codec for AifCodec {
         Ok(chunks)
     }
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
+        let Some(metadata) = metadata else {
+            return Err(anyhow!("No metadata to embed"));
+        };
         let chunks = match metadata {
             Metadata::Wav(chunks) => chunks, // AIFF uses same chunk structure as WAV
             _ => return Err(anyhow!("Unsupported metadata format for AIFF")),
