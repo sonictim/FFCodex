@@ -16,6 +16,70 @@ impl Codec for Mp3Codec {
         Ok(())
     }
 
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
+        use std::fs;
+        use memmap2::MmapOptions;
+
+        let file = fs::File::open(file_path)?;
+        let file_size = file.metadata()?.len() as usize;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        self.validate_file_format(&mapped_file)?;
+
+        // Use MP3 decoder to extract basic information from the first frame
+        let mut decoder = Mp3Decoder::new(Cursor::new(&mapped_file[..]));
+
+        let mut sample_rate = 0;
+        let mut channels = 0;
+        let mut total_samples = 0;
+
+        // Read frames to get format information and estimate duration
+        while let Ok(Frame {
+            data,
+            sample_rate: sr,
+            channels: ch,
+            ..
+        }) = decoder.next_frame()
+        {
+            if sample_rate == 0 {
+                sample_rate = sr;
+                channels = ch;
+            }
+            total_samples += data.len() / ch;
+        }
+
+        if sample_rate == 0 || channels == 0 {
+            return Err(anyhow!("Could not determine MP3 format information"));
+        }
+
+        // Calculate duration (this is an approximation since we counted samples)
+        let duration_seconds = if sample_rate > 0 {
+            total_samples as f64 / (sample_rate * channels) as f64
+        } else {
+            0.0
+        };
+
+        let duration = if duration_seconds >= 3600.0 {
+            format!(
+                "{:.0}:{:02.0}:{:02.0}",
+                duration_seconds / 3600.0,
+                (duration_seconds % 3600.0) / 60.0,
+                duration_seconds % 60.0
+            )
+        } else {
+            format!("{:.0}:{:02.0}", duration_seconds / 60.0, duration_seconds % 60.0)
+        };
+
+        Ok(FileInfo {
+            path: file_path.to_string(),
+            size: file_size,
+            sample_rate: sample_rate as u16,
+            channels: channels as u16,
+            bit_depth: 16, // MP3 is typically decoded to 16-bit
+            duration,
+        })
+    }
+
     fn decode(&self, input: &[u8]) -> R<AudioBuffer> {
         self.validate_file_format(input)?;
 

@@ -56,6 +56,21 @@ pub fn get_fingerprint(path: &str) -> R<String> {
     Codex::new(path)?.decode()?.get_chromaprint_fingerprint()
 }
 
+pub fn get_basic_metadata(path: &str) -> R<FileInfo> {
+    let codex = Codex::new(path)?.extract_metadata()?;
+    codex.get_file_info()
+}
+
+#[derive(Debug)]
+pub struct FileInfo {
+    pub path: String,
+    pub size: usize,
+    pub sample_rate: u16,
+    pub channels: u16,
+    pub bit_depth: u16,
+    pub duration: String,
+}
+
 #[derive(Debug)]
 pub enum Metadata {
     // Chunk-based formats (WAV, AIFF, WavPack) all use the same structure
@@ -315,11 +330,119 @@ impl Codex {
         }
         Ok(())
     }
+
+    pub fn set_metadata_field(&mut self, key: &str, value: &str) -> R<()> {
+        let metadata = self
+            .metadata
+            .get_or_insert_with(|| Metadata::Wav(Vec::new()));
+
+        match metadata {
+            Metadata::Wav(chunks) => {
+                dprintln!(
+                    "🔍 set_metadata_field: Looking for key '{}' in {} chunks",
+                    key,
+                    chunks.len()
+                );
+
+                // Debug: Show what chunks we have
+                for (i, chunk) in chunks.iter().enumerate() {
+                    dprintln!(
+                        "🔍 Chunk [{}]: {} (has field: {})",
+                        i,
+                        chunk.id(),
+                        chunk.get_field(key).is_some()
+                    );
+                }
+
+                // Try to find existing chunk with this field
+                for chunk in chunks.iter_mut() {
+                    if chunk.get_field(key).is_some() {
+                        dprintln!(
+                            "✅ Found existing chunk {} with field '{}', updating...",
+                            chunk.id(),
+                            key
+                        );
+                        return chunk.set_field(key, value);
+                    }
+                }
+
+                // Look for iXML chunk to add the field to
+                for chunk in chunks.iter_mut() {
+                    if chunk.id() == "iXML" {
+                        dprintln!("📝 Adding field '{}' to existing iXML chunk", key);
+                        return chunk.set_field(key, value);
+                    }
+                }
+
+                dprintln!("➕ Creating new TextTag chunk for key '{}'", key);
+                // Create new TextTag chunk if field not found
+                chunks.push(MetadataChunk::TextTag {
+                    key: key.to_string(),
+                    value: value.to_string(),
+                });
+                Ok(())
+            }
+            Metadata::Flac(tag) => {
+                // For FLAC, we need to use metaflac's proper API
+                tag.set_vorbis(key, vec![value.to_string()]);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn get_metadata_field(&self, key: &str) -> Option<String> {
+        match &self.metadata {
+            Some(Metadata::Wav(chunks)) => chunks.iter().find_map(|chunk| chunk.get_field(key)),
+            Some(Metadata::Flac(tag)) => tag
+                .vorbis_comments()
+                .and_then(|comments| comments.get(key))
+                .and_then(|values| values.first())
+                .map(|s| s.to_string()),
+            None => None,
+        }
+    }
+
+    // pub fn remove_metadata_field(&mut self, key: &str) -> R<bool> {
+    //     match &mut self.metadata {
+    //         Some(Metadata::Wav(chunks)) => {
+    //             let initial_len = chunks.len();
+    //             chunks.retain(|chunk| {
+    //                 !matches!(
+    //                     chunk,
+    //                     MetadataChunk::TextTag { key: k, .. } if k == key
+    //                 )
+    //             });
+    //             Ok(chunks.len() != initial_len)
+    //         }
+    //         Some(Metadata::Flac(tag)) => {
+    //             if let Some(mut comments) = tag.vorbis_comments().cloned() {
+    //                 let had_field = comments.get(key).is_some();
+    //                 comments.remove(key);
+    //                 tag.set_vorbis_comments(comments);
+    //                 Ok(had_field)
+    //             } else {
+    //                 Ok(false)
+    //             }
+    //         }
+    //         None => Ok(false),
+    //     }
+    //
+    fn get_file_info(&self) -> R<FileInfo> {
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No codec available for decoding audio file: {}",
+                self.path.display()
+            )
+        })?;
+        codec.get_file_info(self.path.to_str().unwrap())
+    }
 }
 
 pub trait Codec: Send + Sync {
     fn validate_file_format(&self, data: &[u8]) -> R<()>;
     fn file_extension(&self) -> &'static str;
+
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo>;
 
     fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>>;
 

@@ -1,5 +1,3 @@
-use claxon::metadata;
-
 use crate::prelude::*;
 
 // Format tags
@@ -35,6 +33,105 @@ impl Codec for WavCodec {
         }
 
         Ok(())
+    }
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
+        use byteorder::{LittleEndian, ReadBytesExt};
+        use std::fs::metadata;
+        use std::io::{Cursor, Read, Seek, SeekFrom};
+
+        // Get file size
+        let file_metadata = metadata(file_path)?;
+        let file_size = file_metadata.len() as usize;
+
+        // Open and map the file
+        let file = std::fs::File::open(file_path)?;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        // Validate file format
+        self.validate_file_format(&mapped_file)?;
+
+        let mut cursor = Cursor::new(&*mapped_file);
+
+        // Skip RIFF header (12 bytes)
+        cursor.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+
+        // Find and parse the fmt chunk
+        let mut sample_rate = 0u32;
+        let mut channels = 0u16;
+        let mut bits_per_sample = 0u16;
+        let mut data_size = 0u32;
+
+        while cursor.position() < mapped_file.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<LittleEndian>()?;
+
+            match &chunk_id {
+                FMT_CHUNK_ID => {
+                    if chunk_size >= 16 {
+                        let _format_tag = cursor.read_u16::<LittleEndian>()?;
+                        channels = cursor.read_u16::<LittleEndian>()?;
+                        sample_rate = cursor.read_u32::<LittleEndian>()?;
+                        cursor.read_u32::<LittleEndian>()?; // byte rate
+                        cursor.read_u16::<LittleEndian>()?; // block align
+                        bits_per_sample = cursor.read_u16::<LittleEndian>()?;
+
+                        // Skip any extra bytes in the fmt chunk
+                        let extra_bytes = if chunk_size > 16 { chunk_size - 16 } else { 0 };
+                        cursor.seek(SeekFrom::Current(extra_bytes as i64))?;
+                    }
+                }
+                DATA_CHUNK_ID => {
+                    data_size = chunk_size;
+                    // Don't read the data, just skip it
+                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                }
+                _ => {
+                    // Skip other chunks
+                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                }
+            }
+
+            // Handle padding
+            if chunk_size % 2 == 1 {
+                cursor.seek(SeekFrom::Current(1))?;
+            }
+        }
+
+        // Calculate duration
+        let duration = if sample_rate > 0 && channels > 0 && bits_per_sample > 0 {
+            let bytes_per_sample = bits_per_sample / 8;
+            let bytes_per_second = sample_rate * channels as u32 * bytes_per_sample as u32;
+            let duration_seconds = data_size as f64 / bytes_per_second as f64;
+
+            let hours = (duration_seconds / 3600.0) as u32;
+            let minutes = ((duration_seconds % 3600.0) / 60.0) as u32;
+            let seconds = (duration_seconds % 60.0) as u32;
+            let milliseconds = ((duration_seconds % 1.0) * 1000.0) as u32;
+
+            if hours > 0 {
+                format!(
+                    "{}:{:02}:{:02}.{:03}",
+                    hours, minutes, seconds, milliseconds
+                )
+            } else {
+                format!("{}:{:02}.{:03}", minutes, seconds, milliseconds)
+            }
+        } else {
+            "Unknown".to_string()
+        };
+
+        Ok(FileInfo {
+            path: file_path.to_string(),
+            size: file_size,
+            sample_rate: sample_rate as u16,
+            channels,
+            bit_depth: bits_per_sample,
+            duration,
+        })
     }
 
     fn decode(&self, input: &[u8]) -> R<AudioBuffer> {

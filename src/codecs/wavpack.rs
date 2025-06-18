@@ -974,6 +974,58 @@ impl Codec for WvCodec {
 
         Ok(())
     }
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
+        use std::fs;
+        use memmap2::MmapOptions;
+
+        let file = fs::File::open(file_path)?;
+        let file_size = file.metadata()?.len() as usize;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        self.validate_file_format(&mapped_file)?;
+
+        // Use WavpackDecoder to extract file information
+        let decoder = WavpackDecoder::new(&mapped_file)?;
+        
+        let sample_rate = decoder.sample_rate();
+        let channels = decoder.channels();
+        let total_samples = decoder.total_samples();
+        
+        // WavPack doesn't store bit depth in the same way as other formats
+        // It's a lossless format that can contain various bit depths
+        // We'll try to determine it from the format flags or default to 16-bit
+        let bit_depth = match decoder.bits_per_sample() {
+            0 => 16, // Default fallback
+            bits => bits,
+        };
+
+        // Calculate duration
+        let duration_seconds = if sample_rate > 0 && total_samples > 0 {
+            total_samples as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+
+        let duration = if duration_seconds >= 3600.0 {
+            format!("{:.0}:{:02.0}:{:02.0}", 
+                duration_seconds / 3600.0, 
+                (duration_seconds % 3600.0) / 60.0, 
+                duration_seconds % 60.0)
+        } else {
+            format!("{:.0}:{:02.0}", 
+                duration_seconds / 60.0, 
+                duration_seconds % 60.0)
+        };
+
+        Ok(FileInfo {
+            path: file_path.to_string(),
+            size: file_size,
+            sample_rate: sample_rate as u16,
+            channels,
+            bit_depth: bit_depth as u16,
+            duration,
+        })
+    }
 
     fn decode(&self, input: &[u8]) -> R<AudioBuffer> {
         self.validate_file_format(input)?;

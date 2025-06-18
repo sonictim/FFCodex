@@ -4,33 +4,35 @@ use base64::{Engine as _, engine::general_purpose};
 
 impl Codex {
     pub fn get_chromaprint_fingerprint(&mut self) -> R<String> {
-        let Some(buffer) = self.buffer.take() else {
+        // Check if buffer exists without taking ownership
+        let Some(ref buffer) = self.buffer else {
             return Err(anyhow::anyhow!(
                 "No audio buffer available for fingerprinting"
             ));
         };
 
+        // Check bit depth and convert if needed (this takes ownership temporarily)
         if buffer.format.bits_per_sample() > 24 {
             dprintln!(
                 "{} bit depth is not supported. Converting to 24bit",
                 self.get_filename()
             );
-            self.change_bit_depth(24)?
+            self.change_bit_depth(24)?;
         }
 
-        let sample_rate = if buffer.sample_rate == 44100 {
+        // Determine target sample rate and resample if needed
+        let target_sample_rate = if self.buffer.as_ref().unwrap().sample_rate == 44100 {
             44100
         } else {
             48000
         };
 
-        self.buffer = Some(buffer); // Restore the buffer
-        self.resample(sample_rate)?;
-        let Some(buffer) = self.buffer.take() else {
-            return Err(anyhow::anyhow!(
-                "No audio buffer available for fingerprinting"
-            ));
-        };
+        if self.buffer.as_ref().unwrap().sample_rate != target_sample_rate {
+            self.resample(target_sample_rate)?;
+        }
+
+        // Now we can work with the final buffer
+        let buffer = self.buffer.as_ref().unwrap();
 
         const MIN_SAMPLES_PER_CHANNEL: usize = 144000; // 3 seconds at 48kHz per channel
 
@@ -41,7 +43,6 @@ impl Codex {
 
         if !has_enough_samples {
             dprintln!("Audio is too short for Chromaprint, using PCM hash instead");
-            self.buffer = Some(buffer); // Restore the buffer
             return self.generate_pcm_hash();
         }
 
@@ -53,11 +54,9 @@ impl Codex {
             single_channel(&buffer.data)
         };
 
-        self.buffer = Some(buffer); // Restore the buffer
-
         // Try Chromaprint fingerprinting
         let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT);
-        if c.start(sample_rate as i32, num_channels) {
+        if c.start(target_sample_rate as i32, num_channels) {
             c.feed(&samples);
             c.finish();
 

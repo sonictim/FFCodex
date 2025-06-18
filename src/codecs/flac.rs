@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use claxon::{FlacReader, metadata};
+use claxon::FlacReader;
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use metaflac::{Block, Tag};
@@ -39,6 +39,86 @@ impl Codec for FlacCodec {
         }
 
         Ok(())
+    }
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
+        use std::fs;
+        use memmap2::MmapOptions;
+
+        let file = fs::File::open(file_path)?;
+        let file_size = file.metadata()?.len() as usize;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        self.validate_file_format(&mapped_file)?;
+
+        let mut cursor = Cursor::new(&mapped_file[..]);
+        
+        // Skip FLAC marker
+        cursor.seek(SeekFrom::Start(4))?;
+
+        // Read the STREAMINFO block (should be the first metadata block)
+        let header = cursor.read_u8()?;
+        let block_type = header & 0x7F;
+        let block_size = cursor.read_u24::<BigEndian>()? as usize;
+
+        if block_type != STREAMINFO_BLOCK_TYPE {
+            return Err(anyhow!("First metadata block is not STREAMINFO"));
+        }
+
+        if block_size < 34 {
+            return Err(anyhow!("Invalid STREAMINFO block size"));
+        }
+
+        // Read STREAMINFO data
+        let mut streaminfo = vec![0u8; block_size];
+        cursor.read_exact(&mut streaminfo)?;
+
+        // Parse STREAMINFO according to FLAC spec
+        let sample_rate = ((streaminfo[10] as u32) << 12) 
+                        | ((streaminfo[11] as u32) << 4) 
+                        | ((streaminfo[12] as u32) >> 4);
+        
+        let channels = (((streaminfo[12] as u16) >> 1) & 0x07) + 1;
+        
+        let bits_per_sample = ((((streaminfo[12] as u16) & 0x01) << 4) 
+                             | ((streaminfo[13] as u16) >> 4)) + 1;
+
+        // Total samples (36-bit value)
+        let total_samples = ((streaminfo[13] as u64 & 0x0F) << 32)
+                          | ((streaminfo[14] as u64) << 24)
+                          | ((streaminfo[15] as u64) << 16)
+                          | ((streaminfo[16] as u64) << 8)
+                          | (streaminfo[17] as u64);
+
+        if sample_rate == 0 || channels == 0 {
+            return Err(anyhow!("Invalid FLAC STREAMINFO data"));
+        }
+
+        // Calculate duration
+        let duration_seconds = if sample_rate > 0 && total_samples > 0 {
+            total_samples as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+
+        let duration = if duration_seconds >= 3600.0 {
+            format!("{:.0}:{:02.0}:{:02.0}", 
+                duration_seconds / 3600.0, 
+                (duration_seconds % 3600.0) / 60.0, 
+                duration_seconds % 60.0)
+        } else {
+            format!("{:.0}:{:02.0}", 
+                duration_seconds / 60.0, 
+                duration_seconds % 60.0)
+        };
+
+        Ok(FileInfo {
+            path: file_path.to_string(),
+            size: file_size,
+            sample_rate: sample_rate as u16,
+            channels,
+            bit_depth: bits_per_sample,
+            duration,
+        })
     }
 
     fn decode(&self, input: &[u8]) -> R<AudioBuffer> {

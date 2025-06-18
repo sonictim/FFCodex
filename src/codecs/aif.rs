@@ -54,6 +54,88 @@ impl Codec for AifCodec {
         Ok(())
     }
 
+    fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
+        use std::fs;
+        use memmap2::MmapOptions;
+
+        let file = fs::File::open(file_path)?;
+        let file_size = file.metadata()?.len() as usize;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        self.validate_file_format(&mapped_file)?;
+
+        let mut cursor = Cursor::new(&mapped_file[..]);
+        cursor.set_position(HEADER_SIZE as u64);
+
+        let mut sample_rate = 0u16;
+        let mut channels = 0u16;
+        let mut bits_per_sample = 0u16;
+        let mut total_frames = 0u32;
+
+        // Find the COMM chunk to extract audio format information
+        while (cursor.position() as usize) < mapped_file.len() {
+            if cursor.position() + 8 > mapped_file.len() as u64 {
+                break;
+            }
+
+            let mut chunk_id = [0u8; 4];
+            cursor.read_exact(&mut chunk_id)?;
+            let chunk_size = cursor.read_u32::<BigEndian>()? as usize;
+
+            if cursor.position() as usize + chunk_size > mapped_file.len() {
+                break;
+            }
+
+            if &chunk_id == FMT_CHUNK_ID {
+                // Found COMM chunk - extract format information
+                channels = cursor.read_u16::<BigEndian>()?;
+                total_frames = cursor.read_u32::<BigEndian>()?;
+                bits_per_sample = cursor.read_u16::<BigEndian>()?;
+
+                // Read the 80-bit IEEE extended sample rate
+                sample_rate = read_ieee_extended(&mut cursor)? as u16;
+                break;
+            } else {
+                // Skip this chunk
+                cursor.set_position(cursor.position() + chunk_size as u64);
+                if chunk_size % 2 == 1 {
+                    cursor.set_position(cursor.position() + 1); // Skip padding
+                }
+            }
+        }
+
+        if sample_rate == 0 || channels == 0 {
+            return Err(anyhow!("Could not find valid COMM chunk in AIFF file"));
+        }
+
+        // Calculate duration
+        let duration_seconds = if sample_rate > 0 {
+            total_frames as f64 / sample_rate as f64
+        } else {
+            0.0
+        };
+
+        let duration = if duration_seconds >= 3600.0 {
+            format!("{:.0}:{:02.0}:{:02.0}", 
+                duration_seconds / 3600.0, 
+                (duration_seconds % 3600.0) / 60.0, 
+                duration_seconds % 60.0)
+        } else {
+            format!("{:.0}:{:02.0}", 
+                duration_seconds / 60.0, 
+                duration_seconds % 60.0)
+        };
+
+        Ok(FileInfo {
+            path: file_path.to_string(),
+            size: file_size,
+            sample_rate,
+            channels,
+            bit_depth: bits_per_sample,
+            duration,
+        })
+    }
+
     fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
         let mut output = Cursor::new(Vec::new());
 

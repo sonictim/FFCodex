@@ -172,6 +172,192 @@ impl MetadataChunk {
             MetadataChunk::Unknown { data, .. } => data,
         }
     }
+
+    pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
+        match self {
+            Self::Bext(data) => {
+                match key {
+                    "Description" => {
+                        // Clear existing description and write new one
+                        data[0..256].fill(0);
+                        let bytes = value.as_bytes();
+                        let len = bytes.len().min(255);
+                        data[0..len].copy_from_slice(&bytes[0..len]);
+                    }
+                    "Originator" => {
+                        data[256..288].fill(0);
+                        let bytes = value.as_bytes();
+                        let len = bytes.len().min(31);
+                        data[256..256 + len].copy_from_slice(&bytes[0..len]);
+                    }
+                    // Add other BEXT fields...
+                    _ => return Err(anyhow::anyhow!("Unknown BEXT field: {}", key)),
+                }
+            }
+            Self::TextTag {
+                key: tag_key,
+                value: tag_value,
+            } => {
+                if tag_key == key {
+                    *tag_value = value.to_string();
+                }
+            }
+            Self::IXml(xml) => {
+                // Parse the XML to modify it properly
+                use quick_xml::{Reader, Writer, events::Event};
+                use std::io::Cursor;
+
+                let mut reader = Reader::from_str(xml);
+                reader.config_mut().trim_text(true);
+
+                let mut writer = Writer::new(Cursor::new(Vec::new()));
+                let mut buf = Vec::new();
+                let mut current_path = Vec::new();
+                let mut field_found = false;
+                let mut skip_element = false;
+
+                // Handle compound keys (like "SPEED_TAPE_SPEED")
+                let (parent_key, child_key) = if let Some(underscore_pos) = key.find('_') {
+                    (
+                        Some(&key[0..underscore_pos]),
+                        Some(&key[underscore_pos + 1..]),
+                    )
+                } else {
+                    (None, Some(key))
+                };
+
+                loop {
+                    match reader.read_event_into(&mut buf) {
+                        Ok(Event::Start(ref e)) => {
+                            let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                            current_path.push(name.clone());
+
+                            // Check if this is the element we want to modify
+                            let should_modify =
+                                if let (Some(parent), Some(child)) = (parent_key, child_key) {
+                                    current_path.len() >= 2
+                                        && current_path[current_path.len() - 2] == parent
+                                        && name == child
+                                } else if let Some(child) = child_key {
+                                    name == child
+                                } else {
+                                    false
+                                };
+
+                            if should_modify {
+                                field_found = true;
+                                skip_element = true;
+                                // Write the start tag
+                                writer.write_event(Event::Start(e.clone()))?;
+                                // Write the new value as text
+                                writer.write_event(Event::Text(
+                                    quick_xml::events::BytesText::new(value),
+                                ))?;
+                            } else {
+                                writer.write_event(Event::Start(e.clone()))?;
+                            }
+                        }
+                        Ok(Event::End(ref e)) => {
+                            let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+
+                            if skip_element && current_path.last() == Some(&name) {
+                                skip_element = false;
+                            }
+
+                            writer.write_event(Event::End(e.clone()))?;
+                            current_path.pop();
+                        }
+                        Ok(Event::Text(ref e)) => {
+                            if !skip_element {
+                                writer.write_event(Event::Text(e.clone()))?;
+                            }
+                            // If skip_element is true, we skip the old text content
+                        }
+                        Ok(Event::Eof) => break,
+                        Ok(event) => {
+                            writer.write_event(event)?;
+                        }
+                        Err(e) => return Err(anyhow::anyhow!("XML parsing error: {}", e)),
+                    }
+                    buf.clear();
+                }
+
+                // If field wasn't found, add it to the XML
+                if !field_found {
+                    let result = writer.into_inner().into_inner();
+                    let mut new_xml = String::from_utf8(result)
+                        .map_err(|e| anyhow::anyhow!("UTF-8 conversion error: {}", e))?;
+
+                    // Find the closing tag of the root element and insert before it
+                    if let Some(closing_pos) = new_xml.rfind("</BWF_IXML_1_0>") {
+                        let new_element =
+                            if let (Some(parent), Some(child)) = (parent_key, child_key) {
+                                format!(
+                                    "  <{}>\n    <{}>{}</{}>\n  </{}>\n",
+                                    parent,
+                                    child,
+                                    Self::escape_xml(value),
+                                    child,
+                                    parent
+                                )
+                            } else if let Some(child) = child_key {
+                                format!("  <{}>{}</{}>\n", child, Self::escape_xml(value), child)
+                            } else {
+                                return Err(anyhow::anyhow!("Invalid key format"));
+                            };
+
+                        new_xml.insert_str(closing_pos, &new_element);
+                    } else {
+                        return Err(anyhow::anyhow!("Invalid iXML structure"));
+                    }
+
+                    *xml = new_xml;
+                } else {
+                    // Use the modified XML
+                    let result = writer.into_inner().into_inner();
+                    *xml = String::from_utf8(result)
+                        .map_err(|e| anyhow::anyhow!("UTF-8 conversion error: {}", e))?;
+                }
+            }
+            _ => return Err(anyhow::anyhow!("Cannot set field on this chunk type")),
+        }
+        Ok(())
+    }
+
+    pub fn get_field(&self, key: &str) -> Option<String> {
+        match self {
+            Self::Bext(data) => {
+                match key {
+                    "Description" => {
+                        if data.len() >= 256 {
+                            Some(
+                                String::from_utf8_lossy(&data[0..256])
+                                    .trim_end_matches('\0')
+                                    .trim()
+                                    .to_string(),
+                            )
+                        } else {
+                            None
+                        }
+                    }
+                    // Add other fields...
+                    _ => None,
+                }
+            }
+            Self::TextTag {
+                key: tag_key,
+                value,
+            } => {
+                if tag_key == key {
+                    Some(value.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn parse(&self) -> R<HashMap<String, String>> {
         match self {
             Self::Bext(data) => {
@@ -832,5 +1018,284 @@ impl MetadataChunk {
         } else {
             None
         }
+    }
+
+    pub fn from_hashmap(map: &HashMap<String, String>, chunk_type: &str) -> R<Self> {
+        match chunk_type.to_lowercase().as_str() {
+            "bext" => Self::create_bext_chunk(map),
+            "ixml" => Self::create_ixml_chunk(map),
+            "id3" => Self::create_id3_chunk(map),
+            "text" => {
+                // For simple text tags, use the first key-value pair
+                if let Some((key, value)) = map.iter().next() {
+                    Ok(Self::TextTag {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                } else {
+                    Err(anyhow::anyhow!("Empty map for text tag"))
+                }
+            }
+            _ => {
+                // Create an Unknown chunk with serialized data
+                let serialized = serde_json::to_string(map)
+                    .map_err(|e| anyhow::anyhow!("Failed to serialize map: {}", e))?;
+                Ok(Self::Unknown {
+                    id: chunk_type.to_string(),
+                    data: serialized.into_bytes(),
+                })
+            }
+        }
+    }
+
+    fn create_bext_chunk(map: &HashMap<String, String>) -> R<Self> {
+        let mut data = vec![0u8; 602]; // Minimum BEXT chunk size
+
+        // Description: 256 bytes
+        if let Some(desc) = map.get("Description") {
+            let desc_bytes = desc.as_bytes();
+            let copy_len = desc_bytes.len().min(255); // Leave room for null terminator
+            data[0..copy_len].copy_from_slice(&desc_bytes[0..copy_len]);
+        }
+
+        // Originator: 32 bytes
+        if let Some(orig) = map.get("Originator") {
+            let orig_bytes = orig.as_bytes();
+            let copy_len = orig_bytes.len().min(31);
+            data[256..256 + copy_len].copy_from_slice(&orig_bytes[0..copy_len]);
+        }
+
+        // OriginatorReference: 32 bytes
+        if let Some(orig_ref) = map.get("OriginatorReference") {
+            let ref_bytes = orig_ref.as_bytes();
+            let copy_len = ref_bytes.len().min(31);
+            data[288..288 + copy_len].copy_from_slice(&ref_bytes[0..copy_len]);
+        }
+
+        // OriginationDate: 10 bytes
+        if let Some(date) = map.get("OriginationDate") {
+            let date_bytes = date.as_bytes();
+            let copy_len = date_bytes.len().min(10);
+            data[320..320 + copy_len].copy_from_slice(&date_bytes[0..copy_len]);
+        }
+
+        // OriginationTime: 8 bytes
+        if let Some(time) = map.get("OriginationTime") {
+            let time_bytes = time.as_bytes();
+            let copy_len = time_bytes.len().min(8);
+            data[330..330 + copy_len].copy_from_slice(&time_bytes[0..copy_len]);
+        }
+
+        // TimeReference: 8 bytes
+        if let Some(time_ref_str) = map.get("TimeReference") {
+            if let Ok(time_ref) = time_ref_str.parse::<u64>() {
+                data[338..346].copy_from_slice(&time_ref.to_le_bytes());
+            }
+        }
+
+        // Version: 2 bytes
+        if let Some(version_str) = map.get("Version") {
+            if let Ok(version) = version_str.parse::<u16>() {
+                data[346..348].copy_from_slice(&version.to_le_bytes());
+            }
+        }
+
+        // UMID: 64 bytes
+        if let Some(umid_str) = map.get("UMID") {
+            if umid_str.len() == 128 {
+                // Convert hex string to bytes
+                for (i, chunk) in umid_str.as_bytes().chunks(2).enumerate() {
+                    if i >= 64 {
+                        break;
+                    }
+                    if let Ok(byte_val) = u8::from_str_radix(&String::from_utf8_lossy(chunk), 16) {
+                        data[348 + i] = byte_val;
+                    }
+                }
+            }
+        }
+
+        // Loudness values
+        if let Some(loudness_str) = map.get("LoudnessValue") {
+            if let Ok(loudness) = loudness_str.parse::<i16>() {
+                data[412..414].copy_from_slice(&loudness.to_le_bytes());
+            }
+        }
+
+        if let Some(range_str) = map.get("LoudnessRange") {
+            if let Ok(range) = range_str.parse::<u16>() {
+                data[414..416].copy_from_slice(&range.to_le_bytes());
+            }
+        }
+
+        if let Some(peak_str) = map.get("MaxTruePeakLevel") {
+            if let Ok(peak) = peak_str.parse::<i16>() {
+                data[416..418].copy_from_slice(&peak.to_le_bytes());
+            }
+        }
+
+        if let Some(momentary_str) = map.get("MaxMomentaryLoudness") {
+            if let Ok(momentary) = momentary_str.parse::<i16>() {
+                data[418..420].copy_from_slice(&momentary.to_le_bytes());
+            }
+        }
+
+        if let Some(short_term_str) = map.get("MaxShortTermLoudness") {
+            if let Ok(short_term) = short_term_str.parse::<i16>() {
+                data[420..422].copy_from_slice(&short_term.to_le_bytes());
+            }
+        }
+
+        // CodingHistory: append to the end
+        if let Some(coding_history) = map.get("CodingHistory") {
+            let history_bytes = coding_history.as_bytes();
+            data.extend_from_slice(history_bytes);
+            data.push(0); // Null terminator
+        }
+
+        Ok(Self::Bext(data))
+    }
+
+    fn create_ixml_chunk(map: &HashMap<String, String>) -> R<Self> {
+        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<BWF_IXML_1_0>\n");
+
+        for (key, value) in map {
+            // Skip version info that was added during parsing
+            if key == "ID3Version" {
+                continue;
+            }
+
+            // Handle compound keys (like "SPEED_TAPE_SPEED")
+            if let Some(underscore_pos) = key.find('_') {
+                let parent = &key[0..underscore_pos];
+                let child = &key[underscore_pos + 1..];
+                xml.push_str(&format!(
+                    "  <{}>\n    <{}>{}</{}>\n  </{}>\n",
+                    parent,
+                    child,
+                    Self::escape_xml(value),
+                    child,
+                    parent
+                ));
+            } else {
+                xml.push_str(&format!(
+                    "  <{}>{}</{}>\n",
+                    key,
+                    Self::escape_xml(value),
+                    key
+                ));
+            }
+        }
+
+        xml.push_str("</BWF_IXML_1_0>\n");
+        Ok(Self::IXml(xml))
+    }
+
+    fn create_id3_chunk(map: &HashMap<String, String>) -> R<Self> {
+        // Create ID3v2.4 tag
+        let mut frames = Vec::new();
+
+        for (key, value) in map {
+            if key == "ID3Version" {
+                continue; // Skip version info
+            }
+
+            if let Some(frame_id) = Self::get_id3v24_frame_id(key) {
+                let frame_data = Self::create_id3_text_frame(&frame_id, value);
+                frames.extend(frame_data);
+            }
+        }
+
+        // Create ID3v2.4 header
+        let mut data = Vec::new();
+        data.extend_from_slice(b"ID3"); // ID3 identifier
+        data.push(4); // Major version
+        data.push(0); // Minor version
+        data.push(0); // Flags
+
+        // Calculate and encode size as syncsafe integer
+        let size = frames.len() as u32;
+        data.push(((size >> 21) & 0x7F) as u8);
+        data.push(((size >> 14) & 0x7F) as u8);
+        data.push(((size >> 7) & 0x7F) as u8);
+        data.push((size & 0x7F) as u8);
+
+        // Append frames
+        data.extend(frames);
+
+        Ok(Self::ID3(data))
+    }
+
+    fn create_id3_text_frame(frame_id: &str, text: &str) -> Vec<u8> {
+        let mut frame = Vec::new();
+
+        // Frame ID (4 bytes)
+        frame.extend_from_slice(frame_id.as_bytes());
+
+        // Frame size (4 bytes, syncsafe)
+        let text_bytes = text.as_bytes();
+        let content_size = text_bytes.len() + 1; // +1 for encoding byte
+        frame.push(((content_size >> 21) & 0x7F) as u8);
+        frame.push(((content_size >> 14) & 0x7F) as u8);
+        frame.push(((content_size >> 7) & 0x7F) as u8);
+        frame.push((content_size & 0x7F) as u8);
+
+        // Frame flags (2 bytes)
+        frame.push(0);
+        frame.push(0);
+
+        // Text encoding (1 byte, 3 = UTF-8)
+        frame.push(3);
+
+        // Text content
+        frame.extend_from_slice(text_bytes);
+
+        frame
+    }
+
+    fn get_id3v24_frame_id(key: &str) -> Option<&'static str> {
+        match key {
+            "Title" => Some("TIT2"),
+            "Artist" => Some("TPE1"),
+            "Album" => Some("TALB"),
+            "Year" => Some("TDRC"),
+            "Genre" => Some("TCON"),
+            "Track" => Some("TRCK"),
+            "Comment" => Some("COMM"),
+            "AlbumArtist" => Some("TPE2"),
+            "ContentGroup" => Some("TIT1"),
+            "Subtitle" => Some("TIT3"),
+            "Conductor" => Some("TPE3"),
+            "ModifiedBy" => Some("TPE4"),
+            "Composer" => Some("TCOM"),
+            "DiscNumber" => Some("TPOS"),
+            "BPM" => Some("TBPM"),
+            "InitialKey" => Some("TKEY"),
+            "Language" => Some("TLAN"),
+            "Length" => Some("TLEN"),
+            "MediaType" => Some("TMED"),
+            "OriginalAlbum" => Some("TOAL"),
+            "OriginalFilename" => Some("TOFN"),
+            "OriginalLyricist" => Some("TOLY"),
+            "OriginalArtist" => Some("TOPE"),
+            "OriginalYear" => Some("TORY"),
+            "FileOwner" => Some("TOWN"),
+            "Publisher" => Some("TPUB"),
+            "RecordingDates" => Some("TRDA"),
+            "InternetRadioName" => Some("TRSN"),
+            "InternetRadioOwner" => Some("TRSO"),
+            "Size" => Some("TSIZ"),
+            "ISRC" => Some("TSRC"),
+            "EncodingSettings" => Some("TSSE"),
+            _ => None,
+        }
+    }
+
+    fn escape_xml(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
     }
 }
