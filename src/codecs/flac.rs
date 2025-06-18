@@ -55,39 +55,97 @@ impl Codec for FlacCodec {
         // Skip FLAC marker
         cursor.seek(SeekFrom::Start(4))?;
 
-        // Read the STREAMINFO block (should be the first metadata block)
-        let header = cursor.read_u8()?;
-        let block_type = header & 0x7F;
-        let block_size = cursor.read_u24::<BigEndian>()? as usize;
+        let mut sample_rate = 0u32;
+        let mut channels = 0u16;
+        let mut bits_per_sample = 0u16;
+        let mut total_samples = 0u64;
+        let mut description = String::new();
 
-        if block_type != STREAMINFO_BLOCK_TYPE {
-            return Err(anyhow!("First metadata block is not STREAMINFO"));
+        // Read metadata blocks
+        loop {
+            let header = cursor.read_u8()?;
+            let is_last = (header & 0x80) != 0;
+            let block_type = header & 0x7F;
+            let block_size = cursor.read_u24::<BigEndian>()? as usize;
+
+            match block_type {
+                STREAMINFO_BLOCK_TYPE => {
+                    if block_size < 34 {
+                        return Err(anyhow!("Invalid STREAMINFO block size"));
+                    }
+
+                    // Read STREAMINFO data
+                    let mut streaminfo = vec![0u8; block_size];
+                    cursor.read_exact(&mut streaminfo)?;
+
+                    // Parse STREAMINFO according to FLAC spec
+                    sample_rate = ((streaminfo[10] as u32) << 12) 
+                                | ((streaminfo[11] as u32) << 4) 
+                                | ((streaminfo[12] as u32) >> 4);
+                    
+                    channels = (((streaminfo[12] as u16) >> 1) & 0x07) + 1;
+                    
+                    bits_per_sample = ((((streaminfo[12] as u16) & 0x01) << 4) 
+                                     | ((streaminfo[13] as u16) >> 4)) + 1;
+
+                    // Total samples (36-bit value)
+                    total_samples = ((streaminfo[13] as u64 & 0x0F) << 32)
+                                  | ((streaminfo[14] as u64) << 24)
+                                  | ((streaminfo[15] as u64) << 16)
+                                  | ((streaminfo[16] as u64) << 8)
+                                  | (streaminfo[17] as u64);
+                }
+                VORBIS_COMMENT_BLOCK_TYPE => {
+                    // VORBIS_COMMENT block contains metadata including possible description
+                    if description.is_empty() {
+                        let mut comment_data = vec![0u8; block_size];
+                        cursor.read_exact(&mut comment_data)?;
+                        
+                        let mut comment_cursor = Cursor::new(&comment_data);
+                        
+                        // Read vendor string length and skip it
+                        if let Ok(vendor_length) = comment_cursor.read_u32::<LittleEndian>() {
+                            if vendor_length as usize <= comment_data.len() - 4 {
+                                comment_cursor.seek(SeekFrom::Current(vendor_length as i64))?;
+                                
+                                // Read number of comments
+                                if let Ok(comment_count) = comment_cursor.read_u32::<LittleEndian>() {
+                                    for _ in 0..comment_count {
+                                        if let Ok(comment_length) = comment_cursor.read_u32::<LittleEndian>() {
+                                            if comment_length > 0 && comment_length as usize <= 1024 { // Reasonable limit
+                                                let mut comment = vec![0u8; comment_length as usize];
+                                                if comment_cursor.read_exact(&mut comment).is_ok() {
+                                                    let comment_str = String::from_utf8_lossy(&comment);
+                                                    if let Some(eq_pos) = comment_str.find('=') {
+                                                        let key = comment_str[..eq_pos].to_lowercase();
+                                                        let value = &comment_str[eq_pos + 1..];
+                                                        
+                                                        if (key == "description" || key == "comment") && !value.trim().is_empty() {
+                                                            description = value.trim().to_string();
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        cursor.seek(SeekFrom::Current(block_size as i64))?;
+                    }
+                }
+                _ => {
+                    // Skip other metadata blocks
+                    cursor.seek(SeekFrom::Current(block_size as i64))?;
+                }
+            }
+
+            if is_last {
+                break;
+            }
         }
-
-        if block_size < 34 {
-            return Err(anyhow!("Invalid STREAMINFO block size"));
-        }
-
-        // Read STREAMINFO data
-        let mut streaminfo = vec![0u8; block_size];
-        cursor.read_exact(&mut streaminfo)?;
-
-        // Parse STREAMINFO according to FLAC spec
-        let sample_rate = ((streaminfo[10] as u32) << 12) 
-                        | ((streaminfo[11] as u32) << 4) 
-                        | ((streaminfo[12] as u32) >> 4);
-        
-        let channels = (((streaminfo[12] as u16) >> 1) & 0x07) + 1;
-        
-        let bits_per_sample = ((((streaminfo[12] as u16) & 0x01) << 4) 
-                             | ((streaminfo[13] as u16) >> 4)) + 1;
-
-        // Total samples (36-bit value)
-        let total_samples = ((streaminfo[13] as u64 & 0x0F) << 32)
-                          | ((streaminfo[14] as u64) << 24)
-                          | ((streaminfo[15] as u64) << 16)
-                          | ((streaminfo[16] as u64) << 8)
-                          | (streaminfo[17] as u64);
 
         if sample_rate == 0 || channels == 0 {
             return Err(anyhow!("Invalid FLAC STREAMINFO data"));
@@ -118,6 +176,7 @@ impl Codec for FlacCodec {
             channels,
             bit_depth: bits_per_sample,
             duration,
+            description,
         })
     }
 

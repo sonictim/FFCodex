@@ -55,8 +55,8 @@ impl Codec for AifCodec {
     }
 
     fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
-        use std::fs;
         use memmap2::MmapOptions;
+        use std::fs;
 
         let file = fs::File::open(file_path)?;
         let file_size = file.metadata()?.len() as usize;
@@ -71,8 +71,9 @@ impl Codec for AifCodec {
         let mut channels = 0u16;
         let mut bits_per_sample = 0u16;
         let mut total_frames = 0u32;
+        let mut description = String::new();
 
-        // Find the COMM chunk to extract audio format information
+        // Find the COMM chunk and description chunks
         while (cursor.position() as usize) < mapped_file.len() {
             if cursor.position() + 8 > mapped_file.len() as u64 {
                 break;
@@ -86,21 +87,68 @@ impl Codec for AifCodec {
                 break;
             }
 
-            if &chunk_id == FMT_CHUNK_ID {
-                // Found COMM chunk - extract format information
-                channels = cursor.read_u16::<BigEndian>()?;
-                total_frames = cursor.read_u32::<BigEndian>()?;
-                bits_per_sample = cursor.read_u16::<BigEndian>()?;
+            match &chunk_id {
+                FMT_CHUNK_ID => {
+                    // Found COMM chunk - extract format information
+                    channels = cursor.read_u16::<BigEndian>()?;
+                    total_frames = cursor.read_u32::<BigEndian>()?;
+                    bits_per_sample = cursor.read_u16::<BigEndian>()?;
 
-                // Read the 80-bit IEEE extended sample rate
-                sample_rate = read_ieee_extended(&mut cursor)? as u16;
-                break;
-            } else {
-                // Skip this chunk
-                cursor.set_position(cursor.position() + chunk_size as u64);
-                if chunk_size % 2 == 1 {
-                    cursor.set_position(cursor.position() + 1); // Skip padding
+                    // Read the 80-bit IEEE extended sample rate
+                    sample_rate = read_ieee_extended(&mut cursor)? as u16;
                 }
+                ANNO_CHUNK_ID => {
+                    // AIFF annotation chunk contains description
+                    if description.is_empty() {
+                        let mut anno_data = vec![0u8; chunk_size];
+                        cursor.read_exact(&mut anno_data)?;
+                        description = String::from_utf8_lossy(&anno_data)
+                            .trim_end_matches('\0')
+                            .trim()
+                            .to_string();
+                    } else {
+                        cursor.set_position(cursor.position() + chunk_size as u64);
+                    }
+                }
+                COMT_CHUNK_ID => {
+                    // AIFF comment chunk - extract first comment as description
+                    if description.is_empty() && chunk_size >= 2 {
+                        let num_comments = cursor.read_u16::<BigEndian>()? as usize;
+                        let mut remaining_size = chunk_size - 2;
+
+                        if num_comments > 0 && remaining_size >= 8 {
+                            // Skip timestamp (4 bytes) and marker_id (2 bytes)
+                            cursor.read_u32::<BigEndian>()?; // timestamp
+                            cursor.read_u16::<BigEndian>()?; // marker_id
+                            let text_len = cursor.read_u16::<BigEndian>()? as usize;
+                            remaining_size -= 8;
+
+                            if text_len > 0 && text_len <= remaining_size {
+                                let mut comment_data = vec![0u8; text_len];
+                                cursor.read_exact(&mut comment_data)?;
+                                description =
+                                    String::from_utf8_lossy(&comment_data).trim().to_string();
+                                remaining_size -= text_len;
+                            }
+                        }
+
+                        // Skip any remaining data
+                        if remaining_size > 0 {
+                            cursor.set_position(cursor.position() + remaining_size as u64);
+                        }
+                    } else {
+                        cursor.set_position(cursor.position() + chunk_size as u64);
+                    }
+                }
+                _ => {
+                    // Skip other chunks
+                    cursor.set_position(cursor.position() + chunk_size as u64);
+                }
+            }
+
+            // Handle padding
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1);
             }
         }
 
@@ -116,14 +164,18 @@ impl Codec for AifCodec {
         };
 
         let duration = if duration_seconds >= 3600.0 {
-            format!("{:.0}:{:02.0}:{:02.0}", 
-                duration_seconds / 3600.0, 
-                (duration_seconds % 3600.0) / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}:{:02.0}",
+                duration_seconds / 3600.0,
+                (duration_seconds % 3600.0) / 60.0,
+                duration_seconds % 60.0
+            )
         } else {
-            format!("{:.0}:{:02.0}", 
-                duration_seconds / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}",
+                duration_seconds / 60.0,
+                duration_seconds % 60.0
+            )
         };
 
         Ok(FileInfo {
@@ -133,6 +185,7 @@ impl Codec for AifCodec {
             channels,
             bit_depth: bits_per_sample,
             duration,
+            description,
         })
     }
 

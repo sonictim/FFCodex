@@ -991,6 +991,39 @@ impl Codec for WvCodec {
         let channels = decoder.channels();
         let total_samples = decoder.total_samples();
         
+        // Extract description from metadata if available
+        let mut description = String::new();
+        if let Ok(metadata_chunks) = decoder.extract_metadata() {
+            for chunk in metadata_chunks {
+                match chunk {
+                    MetadataChunk::TextTag { key, value } => {
+                        if (key.to_lowercase().contains("description") || 
+                            key.to_lowercase().contains("comment")) && !value.trim().is_empty() {
+                            description = value.trim().to_string();
+                            break;
+                        }
+                    }
+                    MetadataChunk::IXml(xml) => {
+                        if description.is_empty() {
+                            // Look for description-like fields in iXML
+                            for line in xml.lines() {
+                                if let Some(idx) = line.find('=') {
+                                    let key = line[0..idx].trim().to_lowercase();
+                                    let value = line[idx + 1..].trim().to_string();
+                                    
+                                    if (key.contains("description") || key.contains("comment")) && !value.is_empty() {
+                                        description = value;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
         // WavPack doesn't store bit depth in the same way as other formats
         // It's a lossless format that can contain various bit depths
         // We'll try to determine it from the format flags or default to 16-bit
@@ -1024,6 +1057,7 @@ impl Codec for WvCodec {
             channels,
             bit_depth: bit_depth as u16,
             duration,
+            description,
         })
     }
 

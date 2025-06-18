@@ -26,6 +26,36 @@ impl Codec for Mp3Codec {
 
         self.validate_file_format(&mapped_file)?;
 
+        // Look for ID3v2 tag at the beginning for description
+        let mut description = String::new();
+        if mapped_file.len() >= 10 && &mapped_file[0..3] == b"ID3" {
+            // ID3v2 header: ID3 + version (2 bytes) + flags (1 byte) + size (4 bytes)
+            let size = ((mapped_file[6] as u32) << 21) |
+                      ((mapped_file[7] as u32) << 14) |
+                      ((mapped_file[8] as u32) << 7) |
+                      (mapped_file[9] as u32);
+            
+            if size > 0 && size < mapped_file.len() as u32 - 10 {
+                let id3_data = &mapped_file[10..(10 + size as usize)];
+                description = extract_id3_description(id3_data);
+            }
+        }
+
+        // If no ID3v2, check for ID3v1 at the end
+        if description.is_empty() && mapped_file.len() >= 128 {
+            let id3v1_start = mapped_file.len() - 128;
+            if &mapped_file[id3v1_start..id3v1_start + 3] == b"TAG" {
+                // ID3v1 comment field is at offset 97-126 (30 bytes)
+                let comment_start = id3v1_start + 97;
+                let comment_end = id3v1_start + 127;
+                let comment_data = &mapped_file[comment_start..comment_end];
+                description = String::from_utf8_lossy(comment_data)
+                    .trim_end_matches('\0')
+                    .trim()
+                    .to_string();
+            }
+        }
+
         // Use MP3 decoder to extract basic information from the first frame
         let mut decoder = Mp3Decoder::new(Cursor::new(&mapped_file[..]));
 
@@ -77,6 +107,7 @@ impl Codec for Mp3Codec {
             channels: channels as u16,
             bit_depth: 16, // MP3 is typically decoded to 16-bit
             duration,
+            description,
         })
     }
 
@@ -234,4 +265,49 @@ impl Codec for Mp3Codec {
     fn extract_metadata_from_file(&self, _file_path: &str) -> R<Metadata> {
         todo!()
     }
+}
+
+// Helper function to extract description from ID3v2 data
+fn extract_id3_description(id3_data: &[u8]) -> String {
+    let mut offset = 0;
+    
+    while offset + 10 < id3_data.len() {
+        // ID3v2.3/2.4 frame header: frame_id (4 bytes) + size (4 bytes) + flags (2 bytes)
+        let frame_id = &id3_data[offset..offset + 4];
+        
+        // Read frame size (big-endian)
+        let frame_size = ((id3_data[offset + 4] as u32) << 24) |
+                        ((id3_data[offset + 5] as u32) << 16) |
+                        ((id3_data[offset + 6] as u32) << 8) |
+                        (id3_data[offset + 7] as u32);
+        
+        if frame_size == 0 || offset + 10 + frame_size as usize > id3_data.len() {
+            break;
+        }
+        
+        // Check for comment frames (COMM) or user text frames (TXXX)
+        if frame_id == b"COMM" || frame_id == b"TXXX" {
+            let frame_data = &id3_data[offset + 10..offset + 10 + frame_size as usize];
+            
+            if !frame_data.is_empty() {
+                // Skip encoding byte and language (for COMM) or encoding byte (for TXXX)
+                let text_start = if frame_id == b"COMM" { 4 } else { 1 };
+                
+                if frame_data.len() > text_start {
+                    let text = String::from_utf8_lossy(&frame_data[text_start..])
+                        .trim_end_matches('\0')
+                        .trim()
+                        .to_string();
+                    
+                    if !text.is_empty() {
+                        return text;
+                    }
+                }
+            }
+        }
+        
+        offset += 10 + frame_size as usize;
+    }
+    
+    String::new()
 }

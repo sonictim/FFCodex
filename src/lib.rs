@@ -69,6 +69,7 @@ pub struct FileInfo {
     pub channels: u16,
     pub bit_depth: u16,
     pub duration: String,
+    pub description: String,
 }
 
 #[derive(Debug)]

@@ -60,6 +60,7 @@ impl Codec for WavCodec {
         let mut channels = 0u16;
         let mut bits_per_sample = 0u16;
         let mut data_size = 0u32;
+        let mut description = String::new();
 
         while cursor.position() < mapped_file.len() as u64 {
             let mut chunk_id = [0u8; 4];
@@ -88,6 +89,51 @@ impl Codec for WavCodec {
                     data_size = chunk_size;
                     // Don't read the data, just skip it
                     cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                }
+                b"bext" => {
+                    // BWF Broadcast Extension chunk contains description
+                    if chunk_size >= 256 {
+                        let mut bext_data = vec![0u8; 256];
+                        cursor.read_exact(&mut bext_data)?;
+                        description = String::from_utf8_lossy(&bext_data)
+                            .trim_end_matches('\0')
+                            .trim()
+                            .to_string();
+
+                        // Skip remaining bext data
+                        if chunk_size > 256 {
+                            cursor.seek(SeekFrom::Current((chunk_size - 256) as i64))?;
+                        }
+                    } else {
+                        cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                    }
+                }
+                b"iXML" => {
+                    // iXML chunk might contain description
+                    if description.is_empty() {
+                        let mut xml_data = vec![0u8; chunk_size as usize];
+                        cursor.read_exact(&mut xml_data)?;
+                        let xml_string = String::from_utf8_lossy(&xml_data);
+
+                        // Look for description-like fields in iXML
+                        for line in xml_string.lines() {
+                            if let Some(idx) = line.find('=') {
+                                let key = line[0..idx].trim().to_lowercase();
+                                let value = line[idx + 1..].trim().to_string();
+
+                                if (key.contains("description")
+                                    || key.contains("comment")
+                                    || key.contains("note"))
+                                    && !value.is_empty()
+                                {
+                                    description = value;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                    }
                 }
                 _ => {
                     // Skip other chunks
@@ -131,6 +177,7 @@ impl Codec for WavCodec {
             channels,
             bit_depth: bits_per_sample,
             duration,
+            description,
         })
     }
 
