@@ -60,7 +60,12 @@ impl Codec for WavCodec {
         let mut channels = 0u16;
         let mut bits_per_sample = 0u16;
         let mut data_size = 0u32;
-        let mut description = String::new();
+
+        // Description candidates in priority order
+        let mut bext_description = String::new();
+        let mut ixml_user_description = String::new();
+        let mut ixml_bext_bwf_description = String::new();
+        let mut id3_comment = String::new();
 
         while cursor.position() < mapped_file.len() as u64 {
             let mut chunk_id = [0u8; 4];
@@ -91,11 +96,11 @@ impl Codec for WavCodec {
                     cursor.seek(SeekFrom::Current(chunk_size as i64))?;
                 }
                 b"bext" => {
-                    // BWF Broadcast Extension chunk contains description
+                    // Priority 1: BWF Broadcast Extension chunk "Description" field
                     if chunk_size >= 256 {
                         let mut bext_data = vec![0u8; 256];
                         cursor.read_exact(&mut bext_data)?;
-                        description = String::from_utf8_lossy(&bext_data)
+                        bext_description = String::from_utf8_lossy(&bext_data)
                             .trim_end_matches('\0')
                             .trim()
                             .to_string();
@@ -109,31 +114,38 @@ impl Codec for WavCodec {
                     }
                 }
                 b"iXML" => {
-                    // iXML chunk might contain description
-                    if description.is_empty() {
-                        let mut xml_data = vec![0u8; chunk_size as usize];
-                        cursor.read_exact(&mut xml_data)?;
-                        let xml_string = String::from_utf8_lossy(&xml_data);
+                    // Priority 2 & 3: iXML chunk - look for USER_DESCRIPTION and BEXT_BWF_DESCRIPTION
+                    let mut xml_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut xml_data)?;
+                    let xml_string = String::from_utf8_lossy(&xml_data);
 
-                        // Look for description-like fields in iXML
-                        for line in xml_string.lines() {
-                            if let Some(idx) = line.find('=') {
-                                let key = line[0..idx].trim().to_lowercase();
-                                let value = line[idx + 1..].trim().to_string();
+                    // Parse iXML for specific fields
+                    for line in xml_string.lines() {
+                        if let Some(idx) = line.find('=') {
+                            let key = line[0..idx].trim();
+                            let value = line[idx + 1..].trim().to_string();
 
-                                if (key.contains("description")
-                                    || key.contains("comment")
-                                    || key.contains("note"))
-                                    && !value.is_empty()
-                                {
-                                    description = value;
-                                    break;
+                            match key {
+                                "USER_DESCRIPTION" => {
+                                    if !value.is_empty() {
+                                        ixml_user_description = value;
+                                    }
                                 }
+                                "BEXT_BWF_DESCRIPTION" => {
+                                    if !value.is_empty() {
+                                        ixml_bext_bwf_description = value;
+                                    }
+                                }
+                                _ => {}
                             }
                         }
-                    } else {
-                        cursor.seek(SeekFrom::Current(chunk_size as i64))?;
                     }
+                }
+                b"ID3 " | b"id3 " => {
+                    // Priority 4: ID3 chunk - look for Comment
+                    let mut id3_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut id3_data)?;
+                    id3_comment = extract_id3_comment(&id3_data);
                 }
                 _ => {
                     // Skip other chunks
@@ -146,6 +158,19 @@ impl Codec for WavCodec {
                 cursor.seek(SeekFrom::Current(1))?;
             }
         }
+
+        // Select description based on priority order
+        let description = if !bext_description.is_empty() {
+            bext_description
+        } else if !ixml_user_description.is_empty() {
+            ixml_user_description
+        } else if !ixml_bext_bwf_description.is_empty() {
+            ixml_bext_bwf_description
+        } else if !id3_comment.is_empty() {
+            id3_comment
+        } else {
+            String::new()
+        };
 
         // Calculate duration
         let duration = if sample_rate > 0 && channels > 0 && bits_per_sample > 0 {
@@ -971,10 +996,67 @@ fn write_chunk<W: Write>(writer: &mut W, id: &[u8], data: &[u8]) -> R<()> {
     Ok(())
 }
 
-// fn read_chunk_id<R: Read>(reader: &mut R) -> Result<[u8; 4], anyhow::Error> {
-//     let mut id = [0u8; 4];
-//     match reader.read_exact(&mut id) {
-//         Ok(()) => Ok(id),
-//         Err(e) => Err(anyhow!("Failed to read chunk ID: {}", e)),
-//     }
-// }
+// Helper function to extract comment from ID3 data
+fn extract_id3_comment(id3_data: &[u8]) -> String {
+    // Check if it's ID3v2
+    if id3_data.len() >= 10 && &id3_data[0..3] == b"ID3" {
+        // ID3v2 format - skip header and look for frames
+        let mut offset = 10; // Skip ID3v2 header
+
+        while offset + 10 < id3_data.len() {
+            // ID3v2 frame header: frame_id (4 bytes) + size (4 bytes) + flags (2 bytes)
+            let frame_id = &id3_data[offset..offset + 4];
+
+            // Read frame size (big-endian for ID3v2.3/2.4)
+            let frame_size = ((id3_data[offset + 4] as u32) << 24)
+                | ((id3_data[offset + 5] as u32) << 16)
+                | ((id3_data[offset + 6] as u32) << 8)
+                | (id3_data[offset + 7] as u32);
+
+            if frame_size == 0 || offset + 10 + frame_size as usize > id3_data.len() {
+                break;
+            }
+
+            // Check for comment frames (COMM)
+            if frame_id == b"COMM" {
+                let frame_data = &id3_data[offset + 10..offset + 10 + frame_size as usize];
+
+                if frame_data.len() > 4 {
+                    // Skip encoding byte (1), language (3), and short description
+                    let mut text_start = 4;
+
+                    // Find the end of the short description (null terminated)
+                    while text_start < frame_data.len() && frame_data[text_start] != 0 {
+                        text_start += 1;
+                    }
+                    text_start += 1; // Skip the null terminator
+
+                    if text_start < frame_data.len() {
+                        let text = String::from_utf8_lossy(&frame_data[text_start..])
+                            .trim_end_matches('\0')
+                            .trim()
+                            .to_string();
+
+                        if !text.is_empty() {
+                            return text;
+                        }
+                    }
+                }
+            }
+
+            offset += 10 + frame_size as usize;
+        }
+    } else {
+        // Try to parse as raw comment data
+        let text = String::from_utf8_lossy(id3_data)
+            .trim_end_matches('\0')
+            .trim()
+            .to_string();
+
+        if !text.is_empty() {
+            return text;
+        }
+    }
+
+    String::new()
+}
