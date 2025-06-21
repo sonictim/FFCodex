@@ -46,10 +46,24 @@ macro_rules! dprintln {
 }
 
 pub fn clean_multi_mono(path: &str) -> R<()> {
-    let mut c = Codex::open(path)?;
-    c.convert_dual_mono()?;
-    c.export(path)?;
-    Ok(())
+    let temp_path = format!("{}.tmp", path);
+    {
+        let mut c = Codex::open(path)?;
+        c.convert_dual_mono()?;
+        c.export(&temp_path)?;
+    }
+    match std::fs::rename(&temp_path, path) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // As a fallback, try to copy then delete
+            if let Err(_copy_err) = std::fs::copy(&temp_path, path) {
+                Err(e.into()) // Return the original error
+            } else {
+                let _ = std::fs::remove_file(&temp_path); // Try to cleanup
+                Ok(())
+            }
+        }
+    }
 }
 
 pub fn get_fingerprint(path: &str) -> R<String> {

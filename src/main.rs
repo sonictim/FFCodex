@@ -21,7 +21,7 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK.wav";
+    let input_file = "/Users/tfarrell/Desktop/DEMO DB/TEMP3 2/SI-TCF8_32_01.flac";
 
     println!("Input file: {}", input_file);
     let data = get_basic_metadata(input_file)?;

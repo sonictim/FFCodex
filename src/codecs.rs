@@ -88,7 +88,9 @@ impl AudioBuffer {
 
     pub fn strip_multi_mono(&mut self) -> R<()> {
         if self.data.is_empty() || self.channels < 2 {
-            return Ok(());
+            return Err(anyhow::anyhow!(
+                "Cannot strip multi-mono: no data or less than 2 channels"
+            ));
         }
 
         let first_channel = std::mem::take(&mut self.data[0]);
