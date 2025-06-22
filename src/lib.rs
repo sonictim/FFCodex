@@ -58,9 +58,20 @@ pub fn clean_multi_mono(path: &str) -> R<()> {
         codec.encode_file(&Some(buffer), temp_path.to_str().unwrap())?; // Write once
     } // All memory freed here
 
-    // Replace original
-    std::fs::rename(&temp_path, path)?;
-    Ok(())
+    // Replace original - use same robust logic as export()
+    match std::fs::rename(&temp_path, path) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // As a fallback, try to copy then delete (Windows compatibility)
+            if let Err(_copy_err) = std::fs::copy(&temp_path, path) {
+                let _ = std::fs::remove_file(&temp_path); // Cleanup on failure
+                Err(e.into()) // Return the original error
+            } else {
+                let _ = std::fs::remove_file(&temp_path); // Cleanup temp file
+                Ok(())
+            }
+        }
+    }
 }
 
 pub fn get_fingerprint(path: &str) -> R<String> {
