@@ -1,6 +1,5 @@
 pub use anyhow::{Result as R, anyhow};
-use claxon::input;
-use ffcodex_lib::{codecs::WavCodec, *};
+use ffcodex_lib::*;
 
 fn main() -> R<()> {
     // Use the directly exported get_version function
@@ -21,7 +20,9 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/DEMO DB/TEMP3 2/SI-TCF8_32_01.flac";
+    let input_file = "/Users/tfarrell/TEMP/CamelGruntsAndRoars HB05_21_1.flac";
+
+    // clean_multi_mono(input_file)?;
 
     println!("Input file: {}", input_file);
     let data = get_basic_metadata(input_file)?;
@@ -36,7 +37,7 @@ fn main() -> R<()> {
     //     elapsed_time.as_secs_f32()
     // );
 
-    let output_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.wav";
+    let output_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.flac";
 
     // // flac_debug(input_file)?;
 
@@ -81,10 +82,7 @@ fn main() -> R<()> {
     c2.parse_metadata()?;
 
     let elapsed_time = start_time.elapsed();
-    println!(
-        "Finished dual mono conversion in {} seconds",
-        elapsed_time.as_secs_f32()
-    );
+    println!("Finished in {} seconds", elapsed_time.as_secs_f32());
 
     // let _c = Codex::new(output_file);
 

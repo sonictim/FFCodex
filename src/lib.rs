@@ -1,6 +1,6 @@
 // pub mod decode;
 pub mod codecs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use codecs::*;
 mod prelude;
@@ -44,26 +44,23 @@ macro_rules! dprintln {
         $crate::debug_println(format_args!($($arg)*))
     };
 }
-
 pub fn clean_multi_mono(path: &str) -> R<()> {
-    let temp_path = format!("{}.tmp", path);
+    let temp_path = std::env::temp_dir().join(format!(
+        "ffcodex_{}",
+        PathBuf::from(path).file_name().unwrap().to_string_lossy()
+    ));
+
+    // Process in chunks to minimize memory usage
     {
-        let mut c = Codex::open(path)?;
-        c.convert_dual_mono()?;
-        c.export(&temp_path)?;
-    }
-    match std::fs::rename(&temp_path, path) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // As a fallback, try to copy then delete
-            if let Err(_copy_err) = std::fs::copy(&temp_path, path) {
-                Err(e.into()) // Return the original error
-            } else {
-                let _ = std::fs::remove_file(&temp_path); // Try to cleanup
-                Ok(())
-            }
-        }
-    }
+        let codec = get_codec(path)?;
+        let mut buffer = codec.decode_file(path)?; // Load once
+        buffer.strip_multi_mono()?; // Process in-place
+        codec.encode_file(&Some(buffer), temp_path.to_str().unwrap())?; // Write once
+    } // All memory freed here
+
+    // Replace original
+    std::fs::rename(&temp_path, path)?;
+    Ok(())
 }
 
 pub fn get_fingerprint(path: &str) -> R<String> {
