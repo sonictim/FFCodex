@@ -53,10 +53,18 @@ pub fn clean_multi_mono(path: &str) -> R<()> {
     // Process in chunks to minimize memory usage
     {
         let codec = get_codec(path)?;
-        let mut buffer = codec.decode_file(path)?; // Load once
-        buffer.strip_multi_mono()?; // Process in-place
-        codec.encode_file(&Some(buffer), temp_path.to_str().unwrap())?; // Write once
-    } // All memory freed here
+        if codec.file_extension() == "wv" {
+            let mut codex = Codex::open(path)?;
+            codex.convert_dual_mono()?;
+            codex.export(temp_path.to_str().unwrap())?;
+        } else {
+            let mut buffer = codec.decode_file(path)?; // Load once
+            let metadata = codec.extract_metadata_from_file(path)?;
+            buffer.strip_multi_mono()?; // Process in-place
+            codec.encode_file(&Some(buffer), temp_path.to_str().unwrap())?; // Write once
+            codec.embed_metadata_to_file(temp_path.to_str().unwrap(), &Some(metadata))?;
+        } // All memory freed here
+    }
 
     // Replace original - use same robust logic as export()
     match std::fs::rename(&temp_path, path) {
