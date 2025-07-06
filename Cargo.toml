@@ -47,3 +47,5 @@ opt-level = 3     # Maximum optimization
 [profile.bench]
 inherits = "release"
 debug = true         # Keep debug info for profiling
+
+

@@ -1,6 +1,6 @@
 // pub mod decode;
 pub mod codecs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use codecs::*;
 mod prelude;
@@ -333,6 +333,7 @@ impl Codex {
     }
 
     pub fn parse_metadata(&self) -> R<()> {
+        dprintln!("Parsing metadata for file: {}", self.path.display());
         match &self.metadata {
             Some(Metadata::Flac(tag, chunks)) => {
                 dprintln!("Parsing FLAC metadata");
@@ -424,6 +425,48 @@ impl Codex {
             Metadata::Flac(tag, chunks) => {
                 // For FLAC, we need to use metaflac's proper API
                 tag.set_vorbis(key, vec![value.to_string()]);
+                dprintln!(
+                    "🔍 set_metadata_field: Looking for key '{}' in {} chunks",
+                    key,
+                    chunks.len()
+                );
+
+                // Debug: Show what chunks we have
+                for (i, chunk) in chunks.iter().enumerate() {
+                    dprintln!(
+                        "🔍 Chunk [{}]: {} (has field: {})",
+                        i,
+                        chunk.id(),
+                        chunk.get_field(key).is_some()
+                    );
+                }
+
+                // Try to find existing chunk with this field
+                for chunk in chunks.iter_mut() {
+                    if chunk.get_field(key).is_some() {
+                        dprintln!(
+                            "✅ Found existing chunk {} with field '{}', updating...",
+                            chunk.id(),
+                            key
+                        );
+                        return chunk.set_field(key, value);
+                    }
+                }
+
+                // Look for iXML chunk to add the field to
+                for chunk in chunks.iter_mut() {
+                    if chunk.id() == "iXML" {
+                        dprintln!("📝 Adding field '{}' to existing iXML chunk", key);
+                        return chunk.set_field(key, value);
+                    }
+                }
+
+                // dprintln!("➕ Creating new TextTag chunk for key '{}'", key);
+                // // Create new TextTag chunk if field not found
+                // chunks.push(MetadataChunk::TextTag {
+                //     key: key.to_string(),
+                //     value: value.to_string(),
+                // });
                 Ok(())
             }
         }
@@ -432,11 +475,19 @@ impl Codex {
     pub fn get_metadata_field(&self, key: &str) -> Option<String> {
         match &self.metadata {
             Some(Metadata::Wav(chunks)) => chunks.iter().find_map(|chunk| chunk.get_field(key)),
-            Some(Metadata::Flac(tag, chunks)) => tag
-                .vorbis_comments()
-                .and_then(|comments| comments.get(key))
-                .and_then(|values| values.first())
-                .map(|s| s.to_string()),
+            Some(Metadata::Flac(tag, chunks)) => {
+                let mut result = tag
+                    .vorbis_comments()
+                    .and_then(|comments| comments.get(key))
+                    .and_then(|values| values.first())
+                    .map(|s| s.to_string());
+
+                if result.is_none() {
+                    result = chunks.iter().find_map(|chunk| chunk.get_field(key));
+                }
+
+                result
+            }
             None => None,
         }
     }

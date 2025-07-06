@@ -707,10 +707,12 @@ impl Codec for FlacCodec {
         let Some(metadata) = metadata else {
             return Err(anyhow!("Cannot embed None Metadata"));
         };
-        let source_tag = match metadata {
-            Metadata::Flac(tag, chunks) => tag,
+        let (source_tag, chunks) = match metadata {
+            Metadata::Flac(tag, chunks) => (tag, chunks),
             _ => return Err(anyhow!("Unsupported metadata format")),
         };
+
+        // First, handle the standard metaflac tags
         let mut dest_tags = Tag::read_from_path(file_path)?;
         for block in source_tag.blocks() {
             match block {
@@ -724,8 +726,19 @@ impl Codec for FlacCodec {
                 _ => {}
             }
         }
-
         dest_tags.save()?;
+
+        // Then, handle the custom metadata chunks if any
+        if !chunks.is_empty() {
+            // Read the file that was just updated with metaflac tags
+            let file_data = std::fs::read(file_path)?;
+
+            // Use embed_metadata_chunks to add the custom chunks
+            let updated_data = self.embed_metadata_chunks(&file_data, chunks)?;
+
+            // Write the final result back to the file
+            std::fs::write(file_path, updated_data)?;
+        }
 
         Ok(())
     }
@@ -739,256 +752,167 @@ impl Codec for FlacCodec {
         let mut cursor = Cursor::new(input);
         let mut output = Cursor::new(Vec::new());
 
-        // Copy FLAC marker - never modify this
+        // Copy FLAC marker
         let mut marker = [0u8; 4];
         cursor.read_exact(&mut marker)?;
         output.write_all(&marker)?;
 
-        // Read the STREAMINFO block header
+        // Read the STREAMINFO block
         let header = cursor.read_u8()?;
         let block_type = header & 0x7F;
+        let is_last = (header & LAST_METADATA_BLOCK_FLAG) != 0;
         let block_size = cursor.read_u24::<BigEndian>()? as usize;
 
         if block_type != STREAMINFO_BLOCK_TYPE {
             return Err(anyhow!("First metadata block is not STREAMINFO"));
         }
 
-        // Copy STREAMINFO data - don't modify this either
+        // Copy STREAMINFO data - never modify this
         let mut streaminfo_data = vec![0u8; block_size];
         cursor.read_exact(&mut streaminfo_data)?;
 
-        // Write the STREAMINFO header exactly as it was, but clear the LAST flag
-        // since we're adding metadata
-        output.write_u8(STREAMINFO_BLOCK_TYPE)?; // Always clear the last block flag
+        // Write STREAMINFO without LAST flag (we're adding metadata)
+        output.write_u8(STREAMINFO_BLOCK_TYPE)?;
         output.write_u24::<BigEndian>(block_size as u32)?;
         output.write_all(&streaminfo_data)?;
 
-        // Collect and organize new metadata chunks
-        let mut vorbis_chunks = Vec::new();
-        let mut picture_chunks = Vec::new();
-        let mut other_chunks = Vec::new();
+        // Skip any existing metadata blocks in the original file
+        // We'll completely replace them with our new metadata
+        let mut found_last = is_last;
+        while !found_last {
+            let header = cursor.read_u8()?;
+            found_last = (header & LAST_METADATA_BLOCK_FLAG) != 0;
+            let block_size = cursor.read_u24::<BigEndian>()? as usize;
+
+            // Skip the block data
+            cursor.seek(SeekFrom::Current(block_size as i64))?;
+        }
+
+        // Organize chunks into groups
         let mut text_tags = Vec::new();
         let mut ixml_chunks = Vec::new();
+        let mut picture_chunks = Vec::new();
+        let mut other_chunks = Vec::new();
 
         for chunk in chunks {
             match chunk {
-                MetadataChunk::IXml(_) => ixml_chunks.push(chunk.clone()),
-                MetadataChunk::Picture { .. } => picture_chunks.push(chunk.clone()),
-                MetadataChunk::TextTag { .. } => text_tags.push(chunk.clone()),
-                MetadataChunk::Unknown { id, .. } if id == "FLAC_VORBIS_COMMENTS" => {
-                    vorbis_chunks.push(chunk.clone())
-                }
-                _ => other_chunks.push(chunk.clone()),
+                MetadataChunk::IXml(_) => ixml_chunks.push(chunk),
+                MetadataChunk::Picture { .. } => picture_chunks.push(chunk),
+                MetadataChunk::TextTag { .. } => text_tags.push(chunk),
+                _ => other_chunks.push(chunk),
             }
         }
 
-        // Create Vorbis comment blocks from various sources
-        // 1. If we have IXML chunks, embed them as IXML= comments
-        // 2. If we have TextTag chunks, embed them as individual comments
-        // 3. If we have existing Vorbis comment chunks, preserve them
+        // Collect all blocks to write
+        let mut blocks_to_write = Vec::new();
 
-        if !ixml_chunks.is_empty() || !text_tags.is_empty() || vorbis_chunks.is_empty() {
-            // Build a new Vorbis comment block
-            let mut vendor = b"FFCodex".to_vec();
+        // Create unified Vorbis comment block if we have text data or IXML
+        if !text_tags.is_empty() || !ixml_chunks.is_empty() {
+            let mut vorbis_data = Cursor::new(Vec::new());
+
+            // Vendor string
+            let vendor = b"FFCodex";
+            vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
+            vorbis_data.write_all(vendor)?;
+
+            // Collect all comments
             let mut comments = Vec::new();
 
-            // Add existing vorbis comments if any
-            for chunk in &vorbis_chunks {
-                if let MetadataChunk::Unknown { data, .. } = chunk {
-                    let vorbis_text = String::from_utf8_lossy(data);
-                    for line in vorbis_text.lines() {
-                        if line.starts_with("VENDOR=") {
-                            vendor = line.trim_start_matches("VENDOR=").as_bytes().to_vec();
-                        } else if !line.is_empty() {
-                            comments.push(line.as_bytes().to_vec());
-                        }
-                    }
-                }
-            }
-
-            // Add IXML content as IXML= comments
+            // Add IXML as IXML= comments
             for chunk in &ixml_chunks {
                 if let MetadataChunk::IXml(ixml_content) = chunk {
-                    let ixml_comment = format!("IXML={}", ixml_content);
-                    comments.push(ixml_comment.as_bytes().to_vec());
+                    comments.push(format!("IXML={}", ixml_content));
                 }
             }
 
-            // Add individual text tags
-            for tag in &text_tags {
-                if let MetadataChunk::TextTag { key, value } = tag {
-                    let comment = format!("{}={}", key, value);
-                    comments.push(comment.as_bytes().to_vec());
+            // Add text tags
+            for chunk in &text_tags {
+                if let MetadataChunk::TextTag { key, value } = chunk {
+                    comments.push(format!("{}={}", key, value));
                 }
             }
 
-            // Create the Vorbis comment block
-            if !comments.is_empty() || !vendor.is_empty() {
-                let mut vorbis_data = Cursor::new(Vec::new());
-                vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
-                vorbis_data.write_all(&vendor)?;
-                vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
+            // Write comment count and comments
+            vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
+            for comment in comments {
+                let comment_bytes = comment.as_bytes();
+                vorbis_data.write_u32::<LittleEndian>(comment_bytes.len() as u32)?;
+                vorbis_data.write_all(comment_bytes)?;
+            }
 
-                for comment in comments {
-                    vorbis_data.write_u32::<LittleEndian>(comment.len() as u32)?;
-                    vorbis_data.write_all(&comment)?;
-                }
+            blocks_to_write.push((VORBIS_COMMENT_BLOCK_TYPE, vorbis_data.into_inner()));
+        }
 
-                vorbis_chunks.clear();
-                vorbis_chunks.push(MetadataChunk::Unknown {
-                    id: "GENERATED_VORBIS_COMMENT".to_string(),
-                    data: vorbis_data.into_inner(),
-                });
+        // Add picture blocks
+        for chunk in &picture_chunks {
+            if let MetadataChunk::Picture {
+                mime_type,
+                description,
+                data,
+            } = chunk
+            {
+                let mut pic_data = Cursor::new(Vec::new());
+
+                // Picture type (0 = Other)
+                pic_data.write_u32::<BigEndian>(0)?;
+
+                // MIME type
+                pic_data.write_u32::<BigEndian>(mime_type.len() as u32)?;
+                pic_data.write_all(mime_type.as_bytes())?;
+
+                // Description
+                pic_data.write_u32::<BigEndian>(description.len() as u32)?;
+                pic_data.write_all(description.as_bytes())?;
+
+                // Width, height, color depth, colors used (all 0 for unknown)
+                pic_data.write_u32::<BigEndian>(0)?;
+                pic_data.write_u32::<BigEndian>(0)?;
+                pic_data.write_u32::<BigEndian>(0)?;
+                pic_data.write_u32::<BigEndian>(0)?;
+
+                // Picture data
+                pic_data.write_u32::<BigEndian>(data.len() as u32)?;
+                pic_data.write_all(data)?;
+
+                blocks_to_write.push((PICTURE_BLOCK_TYPE, pic_data.into_inner()));
             }
         }
 
-        // Collect all metadata blocks (excluding the individual text tags and ixml since they're now in vorbis)
-        let all_chunks: Vec<&MetadataChunk> = vorbis_chunks
-            .iter()
-            .chain(picture_chunks.iter())
-            .chain(other_chunks.iter())
-            .collect();
-
-        // Now write the new metadata blocks
-        for (i, chunk) in all_chunks.iter().enumerate() {
-            let is_last = i == all_chunks.len() - 1;
-
-            let (block_type, data) = match chunk {
-                MetadataChunk::Unknown { id, data }
-                    if id == "GENERATED_VORBIS_COMMENT" || id == "FLAC_VORBIS_COMMENTS" =>
-                {
-                    (VORBIS_COMMENT_BLOCK_TYPE, data.clone())
-                }
-                MetadataChunk::Picture {
-                    mime_type,
-                    description,
-                    data,
-                } => {
-                    let mut pic_data = Cursor::new(Vec::new());
-                    pic_data.write_u32::<BigEndian>(0)?; // Picture type
-                    pic_data.write_u32::<BigEndian>(mime_type.len() as u32)?;
-                    pic_data.write_all(mime_type.as_bytes())?;
-                    pic_data.write_u32::<BigEndian>(description.len() as u32)?;
-                    pic_data.write_all(description.as_bytes())?;
-
-                    // Width, height, color depth, colors used
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
-
-                    pic_data.write_u32::<BigEndian>(data.len() as u32)?;
-                    pic_data.write_all(data)?;
-
-                    (PICTURE_BLOCK_TYPE, pic_data.into_inner())
-                }
-                MetadataChunk::Unknown { id, data } if id == "FLAC_PICTURE" => {
-                    (PICTURE_BLOCK_TYPE, data.clone())
-                }
-                MetadataChunk::TextTag { .. } => {
-                    continue; // Skip individual text tags (they're now in vorbis comments)
-                }
-                MetadataChunk::IXml { .. } => {
-                    continue; // Skip IXML chunks (they're now in vorbis comments)
-                }
-                MetadataChunk::Unknown { id, data } => {
-                    let block_type = if id.starts_with("FLAC_") {
-                        id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
+        // Add other chunks (application blocks, etc.)
+        for chunk in &other_chunks {
+            if let MetadataChunk::Unknown { id, data } = chunk {
+                let block_type = if id.starts_with("FLAC_") {
+                    // Try to parse the block type from the ID
+                    if let Ok(parsed_type) = id.trim_start_matches("FLAC_").parse::<u8>() {
+                        parsed_type & 0x7F
                     } else {
+                        // Use application block type for unknown blocks
                         0x7F
-                    };
-                    (block_type, data.clone())
-                }
-                _ => (0x7F, chunk.data().to_vec()),
-            };
+                    }
+                } else {
+                    // Default to application block
+                    0x7F
+                };
+                blocks_to_write.push((block_type, data.clone()));
+            }
+        }
 
-            // Write the header for our new metadata block
-            output.write_u8(if is_last {
+        // Write all metadata blocks
+        for (i, (block_type, data)) in blocks_to_write.iter().enumerate() {
+            let is_last_block = i == blocks_to_write.len() - 1;
+
+            let header = if is_last_block {
                 block_type | LAST_METADATA_BLOCK_FLAG
             } else {
-                block_type
-            })?;
+                *block_type
+            };
 
-            // Write the block size and data
+            output.write_u8(header)?;
             output.write_u24::<BigEndian>(data.len() as u32)?;
-            output.write_all(&data)?;
+            output.write_all(data)?;
         }
 
-        // Now we need to read (and skip) all original metadata blocks after STREAMINFO
-        // The first block we already read (STREAMINFO)
-        let mut last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
-
-        // If the original STREAMINFO was the last metadata block, we're done with metadata
-        // Otherwise, copy all remaining original metadata blocks
-        if !last_metadata_block {
-            let mut original_metadata_blocks = Vec::new();
-
-            // First, read all metadata blocks to memory
-            while !last_metadata_block {
-                // Read block header
-                let header = cursor.read_u8()?;
-                last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
-                let block_type = header & 0x7F;
-                let block_size = cursor.read_u24::<BigEndian>()? as usize;
-
-                // Read block data
-                let mut block_data = vec![0u8; block_size];
-                cursor.read_exact(&mut block_data)?;
-
-                // Store this metadata block (header and all) for later
-                original_metadata_blocks.push((block_type, block_data));
-            }
-
-            // Now write all original metadata blocks (if any)
-            // but set the LAST flag only on the very last one
-            if !original_metadata_blocks.is_empty() {
-                // If we added our own blocks, clear the LAST flag on our last one
-                if !all_chunks.is_empty() {
-                    // Go back and clear the LAST flag on our last written metadata block
-                    let current_position = output.position();
-                    let last_header_pos =
-                        current_position - all_chunks.last().unwrap().data().len() as u64 - 4;
-                    output.seek(SeekFrom::Start(last_header_pos))?;
-
-                    let last_block_type = match all_chunks.last().unwrap() {
-                        MetadataChunk::IXml(_) => VORBIS_COMMENT_BLOCK_TYPE,
-                        MetadataChunk::Picture { .. } => PICTURE_BLOCK_TYPE,
-                        MetadataChunk::Unknown { id, .. } if id == "FLAC_PICTURE" => {
-                            PICTURE_BLOCK_TYPE
-                        }
-                        MetadataChunk::Unknown { id, .. } if id.starts_with("FLAC_") => {
-                            id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
-                        }
-                        _ => 0x7F,
-                    };
-
-                    // Write without LAST flag
-                    output.write_u8(last_block_type)?;
-
-                    // Restore the position
-                    output.seek(SeekFrom::Start(current_position))?;
-                }
-
-                // Write all but the last original metadata block
-                for (i, (block_type, block_data)) in original_metadata_blocks.iter().enumerate() {
-                    let is_last = i == original_metadata_blocks.len() - 1;
-
-                    // Write the header
-                    output.write_u8(if is_last {
-                        block_type | LAST_METADATA_BLOCK_FLAG
-                    } else {
-                        *block_type
-                    })?;
-
-                    // Write the block size and data
-                    output.write_u24::<BigEndian>(block_data.len() as u32)?;
-                    output.write_all(block_data)?;
-                }
-            }
-        }
-
-        // Finally, copy all audio frames (everything after metadata)
-        let _position = cursor.position();
+        // Copy the remaining audio data
         let mut audio_data = Vec::new();
         cursor.read_to_end(&mut audio_data)?;
         output.write_all(&audio_data)?;

@@ -1203,7 +1203,7 @@ impl MetadataChunk {
             }
 
             if let Some(frame_id) = Self::get_id3v24_frame_id(key) {
-                let frame_data = Self::create_id3_text_frame(&frame_id, value);
+                let frame_data = Self::create_id3_text_frame(frame_id, value);
                 frames.extend(frame_data);
             }
         }
