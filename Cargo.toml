@@ -1,6 +1,6 @@
 [package]
 name = "FFcodex"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 build = "build.rs"
 
@@ -47,5 +47,3 @@ opt-level = 3     # Maximum optimization
 [profile.bench]
 inherits = "release"
 debug = true         # Keep debug info for profiling
-
-

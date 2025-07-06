@@ -342,13 +342,15 @@ impl Codex {
                 } else {
                     dprintln!("No Vorbis Comments found in FLAC metadata");
                 }
+                
+                // Only parse the first relevant metadata chunk (iXML or Vorbis) for FLAC
                 for chunk in chunks {
-                    // if chunk.id() == "SMED" {
-                    //     dprintln!("{:?}", chunk);
-                    // }
-                    dprintln!("Parsing metadata chunk: {:?}", chunk.id());
-                    let map = chunk.parse()?;
-                    dprintln!("Parsed metadata chunk: {:?}", map);
+                    if matches!(chunk, MetadataChunk::IXml(_)) {
+                        dprintln!("Parsing first iXML metadata chunk: {:?}", chunk.id());
+                        let map = chunk.parse()?;
+                        dprintln!("Parsed iXML metadata chunk: {:?}", map);
+                        break; // Stop after parsing the first iXML chunk
+                    }
                 }
 
                 return Ok(());

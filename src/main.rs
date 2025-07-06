@@ -47,7 +47,7 @@ fn main() -> R<()> {
 
     c.parse_metadata()?;
 
-    c.set_metadata_field("USER_DESIGNER", "Tim Farrell")?;
+    // c.set_metadata_field("USER_DESIGNER", "Tim Farrell")?;
 
     if let Some(ref metadata) = c.metadata {
         match metadata {
