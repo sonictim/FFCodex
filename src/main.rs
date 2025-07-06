@@ -20,7 +20,7 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/FOLY MetalFlashli 9004_82_6.flac";
+    let input_file = "/Users/tfarrell/Desktop/FOLY MetalFlashli 9004_82_6.flac";
 
     // clean_multi_mono(input_file)?;
 
@@ -37,7 +37,7 @@ fn main() -> R<()> {
     //     elapsed_time.as_secs_f32()
     // );
 
-    let output_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.flac";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
 
     // // flac_debug(input_file)?;
 
