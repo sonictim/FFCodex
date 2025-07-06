@@ -47,7 +47,13 @@ fn main() -> R<()> {
 
     c.parse_metadata()?;
 
-    // c.set_metadata_field("USER_DESIGNER", "Tim Farrell")?;
+    c.set_metadata_field("USER_DESIGNER", "Tim Farrell")?;
+
+    // Test reading the field back
+    match c.get_metadata_field("USER_DESIGNER") {
+        Some(value) => println!("✅ USER_DESIGNER field read back: '{}'", value),
+        None => println!("❌ USER_DESIGNER field not found"),
+    }
 
     if let Some(ref metadata) = c.metadata {
         match metadata {

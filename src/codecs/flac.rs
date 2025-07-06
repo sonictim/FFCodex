@@ -539,15 +539,18 @@ impl Codec for FlacCodec {
                         // Read the application ID (first 4 bytes)
                         let app_id = &data[0..4];
                         let app_data = &data[4..];
-                        
+
                         match app_id {
                             b"iXML" => {
-                                // Parse iXML data - this is what we really want
-                                if let Ok(xml_string) = String::from_utf8(app_data.to_vec()) {
-                                    chunks.push(MetadataChunk::IXml(xml_string));
+                                // Only process if we haven't found relevant metadata yet
+                                if !found_relevant_metadata {
+                                    // Parse iXML data - this is what we really want
+                                    if let Ok(xml_string) = String::from_utf8(app_data.to_vec()) {
+                                        dprintln!("📖 Found iXML block with {} bytes: {}", xml_string.len(), &xml_string[..xml_string.len().min(200)]);
+                                        chunks.push(MetadataChunk::IXml(xml_string));
+                                        found_relevant_metadata = true; // Mark that we found our metadata
+                                    }
                                 }
-                                // Stop processing after finding iXML - this is the main metadata we care about
-                                break;
                             }
                             _ => {
                                 // Skip all other application blocks - we only care about iXML
@@ -569,25 +572,59 @@ impl Codec for FlacCodec {
         let Some(metadata) = metadata else {
             return Err(anyhow!("Cannot embed None Metadata"));
         };
-        
+
         let (tag, chunks) = match metadata {
             Metadata::Flac(tag, chunks) => (tag, chunks),
             _ => return Err(anyhow!("Unsupported metadata format")),
         };
 
+        dprintln!("embed_metadata_to_file: Starting with {} chunks", chunks.len());
+
         // Use metaflac to safely write metadata blocks
         let mut dest_tag = Tag::read_from_path(file_path).unwrap_or_else(|_| Tag::new());
-        
+
         // Clear existing metadata blocks that we're about to replace
         dest_tag.remove_blocks(metaflac::BlockType::VorbisComment);
         dest_tag.remove_blocks(metaflac::BlockType::Picture);
         dest_tag.remove_blocks(metaflac::BlockType::Application);
 
-        // Add blocks from the source tag
+        // Collect the IDs of chunks we're going to replace
+        let mut replacing_app_ids = std::collections::HashSet::new();
+        for chunk in chunks {
+            match chunk {
+                MetadataChunk::IXml(_) => {
+                    replacing_app_ids.insert(b"iXML".to_vec());
+                }
+                MetadataChunk::Unknown { id, .. } if id.starts_with("FLAC_APP_") => {
+                    let app_id_str = id.trim_start_matches("FLAC_APP_");
+                    let app_id = if app_id_str.len() >= 4 {
+                        app_id_str.as_bytes()[0..4].to_vec()
+                    } else {
+                        let mut id_bytes = app_id_str.as_bytes().to_vec();
+                        id_bytes.resize(4, 0);
+                        id_bytes
+                    };
+                    replacing_app_ids.insert(app_id);
+                }
+                _ => {}
+            }
+        }
+
+        // Add blocks from the source tag, but skip Application blocks we're going to replace
         for block in tag.blocks() {
+            dprintln!("embed_metadata_to_file: Processing source tag block: {:?}", std::mem::discriminant(block));
             match block {
-                Block::VorbisComment(_) | Block::Picture(_) | Block::Application(_) => {
+                Block::VorbisComment(_) | Block::Picture(_) => {
+                    dprintln!("embed_metadata_to_file: Adding block from source tag");
                     dest_tag.push_block(block.clone());
+                }
+                Block::Application(app_block) => {
+                    if !replacing_app_ids.contains(&app_block.id) {
+                        dprintln!("embed_metadata_to_file: Adding APPLICATION block from source tag with ID: {:?}", String::from_utf8_lossy(&app_block.id));
+                        dest_tag.push_block(block.clone());
+                    } else {
+                        dprintln!("embed_metadata_to_file: Skipping APPLICATION block from source tag with ID: {:?} (will be replaced)", String::from_utf8_lossy(&app_block.id));
+                    }
                 }
                 _ => {}
             }
@@ -595,37 +632,53 @@ impl Codec for FlacCodec {
 
         // Process chunks and convert them to metaflac blocks
         for chunk in chunks {
+            dprintln!("embed_metadata_to_file: Processing chunk: {:?}", chunk);
             match chunk {
                 MetadataChunk::IXml(xml_string) => {
-                    // Check if this is an iXML APPLICATION block or Vorbis comment
-                    if xml_string.contains("<BWFXML>") {
+                    dprintln!("embed_metadata_to_file: Processing iXML chunk with {} bytes", xml_string.len());
+                    dprintln!("embed_metadata_to_file: XML content (first 100 chars): {}", &xml_string[..xml_string.len().min(100)]);
+                    dprintln!("embed_metadata_to_file: Contains <?xml: {}", xml_string.contains("<?xml"));
+                    dprintln!("embed_metadata_to_file: Contains <BWFXML>: {}", xml_string.contains("<BWFXML>"));
+                    dprintln!("embed_metadata_to_file: Contains <BWF_IXML: {}", xml_string.contains("<BWF_IXML"));
+                    
+                    // Check if this is proper iXML data (contains XML structure)
+                    if xml_string.contains("<?xml") || xml_string.contains("<BWFXML>") || xml_string.contains("<BWF_IXML") {
+                        dprintln!("embed_metadata_to_file: Creating iXML APPLICATION block");
                         // This is iXML data - create APPLICATION block
                         let app_block = metaflac::block::Application {
                             id: b"iXML".to_vec(),
                             data: xml_string.as_bytes().to_vec(),
                         };
                         dest_tag.push_block(Block::Application(app_block));
+                        dprintln!("embed_metadata_to_file: Added iXML APPLICATION block");
                     } else {
-                        // This is Vorbis comment data
+                        dprintln!("embed_metadata_to_file: Processing as Vorbis comment");
+                        // This is Vorbis comment data (legacy format)
                         let mut vorbis_comment = metaflac::block::VorbisComment::new();
-                        
+
                         for line in xml_string.lines() {
                             if line.starts_with("VENDOR=") {
-                                vorbis_comment.vendor_string = line.trim_start_matches("VENDOR=").to_string();
+                                vorbis_comment.vendor_string =
+                                    line.trim_start_matches("VENDOR=").to_string();
                             } else if !line.is_empty() && line.contains('=') {
                                 if let Some((key, value)) = line.split_once('=') {
-                                    vorbis_comment.comments
+                                    vorbis_comment
+                                        .comments
                                         .entry(key.to_string())
                                         .or_default()
                                         .push(value.to_string());
                                 }
                             }
                         }
-                        
+
                         dest_tag.push_block(Block::VorbisComment(vorbis_comment));
                     }
                 }
-                MetadataChunk::Picture { mime_type, description, data } => {
+                MetadataChunk::Picture {
+                    mime_type,
+                    description,
+                    data,
+                } => {
                     let picture_block = metaflac::block::Picture {
                         picture_type: metaflac::block::PictureType::Other,
                         mime_type: mime_type.clone(),
@@ -649,7 +702,7 @@ impl Codec for FlacCodec {
                             id_bytes.resize(4, 0);
                             id_bytes
                         };
-                        
+
                         let app_block = metaflac::block::Application {
                             id: app_id,
                             data: data.clone(),
@@ -661,7 +714,8 @@ impl Codec for FlacCodec {
                 MetadataChunk::TextTag { key, value } => {
                     // Create a new VorbisComment block or add to existing one
                     let mut vorbis_comment = metaflac::block::VorbisComment::new();
-                    vorbis_comment.comments
+                    vorbis_comment
+                        .comments
                         .entry(key.clone())
                         .or_default()
                         .push(value.clone());
@@ -674,7 +728,8 @@ impl Codec for FlacCodec {
         }
 
         // Write the metadata back to the file
-        dest_tag.write_to_path(file_path)
+        dest_tag
+            .write_to_path(file_path)
             .map_err(|e| anyhow!("Failed to write FLAC metadata: {}", e))?;
 
         Ok(())

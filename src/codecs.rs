@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::dprintln;
 use crate::prelude::*;
 mod aif;
 mod flac;
@@ -209,6 +210,16 @@ impl MetadataChunk {
                 use quick_xml::{Reader, Writer, events::Event};
                 use std::io::Cursor;
 
+                dprintln!(
+                    "🔧 IXml set_field: Updating key '{}' with value '{}'",
+                    key,
+                    value
+                );
+                dprintln!(
+                    "🔧 Original XML (first 300 chars): {}",
+                    &xml[..xml.len().min(300)]
+                );
+
                 let mut reader = Reader::from_str(xml);
                 reader.config_mut().trim_text(true);
 
@@ -218,7 +229,7 @@ impl MetadataChunk {
                 let mut field_found = false;
                 let mut skip_element = false;
 
-                // Handle compound keys (like "SPEED_TAPE_SPEED")
+                // Handle compound keys (like "USER_DESIGNER")
                 let (parent_key, child_key) = if let Some(underscore_pos) = key.find('_') {
                     (
                         Some(&key[0..underscore_pos]),
@@ -228,25 +239,55 @@ impl MetadataChunk {
                     (None, Some(key))
                 };
 
+                dprintln!(
+                    "🔧 Parsed key: parent='{}', child='{}'",
+                    parent_key.unwrap_or("None"),
+                    child_key.unwrap_or("None")
+                );
+
                 loop {
                     match reader.read_event_into(&mut buf) {
                         Ok(Event::Start(ref e)) => {
                             let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                             current_path.push(name.clone());
 
+                            dprintln!(
+                                "🔧 XML Start element: '{}', current path: {:?}",
+                                name,
+                                current_path
+                            );
+
                             // Check if this is the element we want to modify
-                            let should_modify =
-                                if let (Some(parent), Some(child)) = (parent_key, child_key) {
-                                    current_path.len() >= 2
-                                        && current_path[current_path.len() - 2] == parent
-                                        && name == child
-                                } else if let Some(child) = child_key {
-                                    name == child
-                                } else {
-                                    false
-                                };
+                            let should_modify = if let (Some(parent), Some(child)) =
+                                (parent_key, child_key)
+                            {
+                                let matches = current_path.len() >= 2
+                                    && current_path[current_path.len() - 2] == parent
+                                    && name == child;
+                                dprintln!(
+                                    "🔧 Checking compound key: parent='{}' child='{}', matches={}",
+                                    parent,
+                                    child,
+                                    matches
+                                );
+                                matches
+                            } else if let Some(child) = child_key {
+                                let matches = name == child;
+                                dprintln!(
+                                    "🔧 Checking simple key: child='{}', matches={}",
+                                    child,
+                                    matches
+                                );
+                                matches
+                            } else {
+                                false
+                            };
 
                             if should_modify {
+                                dprintln!(
+                                    "🎯 Found matching element! Updating with value '{}'",
+                                    value
+                                );
                                 field_found = true;
                                 skip_element = true;
                                 // Write the start tag
@@ -291,7 +332,7 @@ impl MetadataChunk {
                         .map_err(|e| anyhow::anyhow!("UTF-8 conversion error: {}", e))?;
 
                     // Find the closing tag of the root element and insert before it
-                    if let Some(closing_pos) = new_xml.rfind("</BWF_IXML_1_0>") {
+                    if let Some(closing_pos) = new_xml.rfind("</BWFXML>") {
                         let new_element =
                             if let (Some(parent), Some(child)) = (parent_key, child_key) {
                                 format!(
@@ -317,8 +358,14 @@ impl MetadataChunk {
                 } else {
                     // Use the modified XML
                     let result = writer.into_inner().into_inner();
-                    *xml = String::from_utf8(result)
+                    let modified_xml = String::from_utf8(result)
                         .map_err(|e| anyhow::anyhow!("UTF-8 conversion error: {}", e))?;
+
+                    dprintln!(
+                        "🔧 Final modified XML (first 300 chars): {}",
+                        &modified_xml[..modified_xml.len().min(300)]
+                    );
+                    *xml = modified_xml;
                 }
             }
             _ => return Err(anyhow::anyhow!("Cannot set field on this chunk type")),
@@ -519,6 +566,11 @@ impl MetadataChunk {
                 // Parse iXML metadata using proper XML parsing
                 use quick_xml::{Reader, events::Event};
 
+                dprintln!(
+                    "📖 IXml parse: Starting to parse XML (first 300 chars): {}",
+                    &xml[..xml.len().min(300)]
+                );
+
                 let mut map = HashMap::new();
                 let mut reader = Reader::from_str(xml);
                 reader.config_mut().trim_text(true);
@@ -531,11 +583,19 @@ impl MetadataChunk {
                     match reader.read_event_into(&mut buf) {
                         Ok(Event::Start(ref e)) => {
                             let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                            current_path.push(name);
+                            current_path.push(name.clone());
                             current_text.clear();
+                            dprintln!("📖 XML Start: '{}', path: {:?}", name, current_path);
                         }
                         Ok(Event::End(ref e)) => {
                             let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                            dprintln!(
+                                "📖 XML End: '{}', text: '{}', path: {:?}",
+                                name,
+                                current_text.trim(),
+                                current_path
+                            );
+
                             if let Some(last) = current_path.last() {
                                 if last == &name && !current_text.trim().is_empty() {
                                     // Create a key from the path
@@ -544,6 +604,11 @@ impl MetadataChunk {
                                     } else {
                                         name.clone()
                                     };
+                                    dprintln!(
+                                        "📖 Adding to map: '{}' = '{}'",
+                                        key,
+                                        current_text.trim()
+                                    );
                                     map.insert(key, current_text.trim().to_string());
                                 }
                             }
@@ -553,10 +618,12 @@ impl MetadataChunk {
                         Ok(Event::Text(ref e)) => {
                             if let Ok(text) = e.unescape() {
                                 current_text.push_str(&text);
+                                dprintln!("📖 XML Text: '{}'", text);
                             }
                         }
                         Ok(Event::Eof) => break,
-                        Err(_) => {
+                        Err(e) => {
+                            dprintln!("📖 XML Parse error: {}, falling back to simple parsing", e);
                             // If XML parsing fails, fall back to simple parsing
                             for line in xml.lines() {
                                 if let Some(idx) = line.find('=') {
@@ -572,6 +639,7 @@ impl MetadataChunk {
                     buf.clear();
                 }
 
+                dprintln!("📖 Final parsed map: {:?}", map);
                 Ok(map)
             }
 

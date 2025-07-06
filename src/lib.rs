@@ -342,7 +342,7 @@ impl Codex {
                 } else {
                     dprintln!("No Vorbis Comments found in FLAC metadata");
                 }
-                
+
                 // Only parse the first relevant metadata chunk (iXML or Vorbis) for FLAC
                 for chunk in chunks {
                     if matches!(chunk, MetadataChunk::IXml(_)) {
@@ -425,50 +425,71 @@ impl Codex {
                 Ok(())
             }
             Metadata::Flac(tag, chunks) => {
-                // For FLAC, we need to use metaflac's proper API
+                // For FLAC, work with the first relevant metadata chunk (iXML or Vorbis)
+                // Also update the metaflac Vorbis comment
                 tag.set_vorbis(key, vec![value.to_string()]);
+
                 dprintln!(
-                    "🔍 set_metadata_field: Looking for key '{}' in {} chunks",
-                    key,
-                    chunks.len()
+                    "🔍 FLAC set_metadata_field: Looking for key '{}' in first relevant chunk only",
+                    key
                 );
 
-                // Debug: Show what chunks we have
-                for (i, chunk) in chunks.iter().enumerate() {
-                    dprintln!(
-                        "🔍 Chunk [{}]: {} (has field: {})",
-                        i,
-                        chunk.id(),
-                        chunk.get_field(key).is_some()
-                    );
-                }
-
-                // Try to find existing chunk with this field
+                // Find and update only the first relevant metadata chunk (iXML)
                 for chunk in chunks.iter_mut() {
-                    if chunk.get_field(key).is_some() {
-                        dprintln!(
-                            "✅ Found existing chunk {} with field '{}', updating...",
-                            chunk.id(),
-                            key
-                        );
-                        return chunk.set_field(key, value);
+                    if matches!(chunk, MetadataChunk::IXml(_)) {
+                        dprintln!("📝 Found first iXML chunk, updating field '{}'", key);
+
+                        // Debug: Print the chunk content before and after update
+                        if let MetadataChunk::IXml(content) = chunk {
+                            dprintln!(
+                                "🔍 iXML content before update (first 200 chars): {}",
+                                &content[..content.len().min(200)]
+                            );
+                        }
+
+                        let result = chunk.set_field(key, value);
+
+                        if let MetadataChunk::IXml(content) = chunk {
+                            dprintln!(
+                                "🔍 iXML content after update (first 200 chars): {}",
+                                &content[..content.len().min(200)]
+                            );
+                        }
+
+                        return result;
                     }
                 }
 
-                // Look for iXML chunk to add the field to
-                for chunk in chunks.iter_mut() {
-                    if chunk.id() == "iXML" {
-                        dprintln!("📝 Adding field '{}' to existing iXML chunk", key);
-                        return chunk.set_field(key, value);
-                    }
-                }
-
-                // dprintln!("➕ Creating new TextTag chunk for key '{}'", key);
-                // // Create new TextTag chunk if field not found
-                // chunks.push(MetadataChunk::TextTag {
-                //     key: key.to_string(),
-                //     value: value.to_string(),
-                // });
+                // If no iXML chunk exists, create a minimal one with just this field
+                dprintln!(
+                    "➕ No iXML chunk found, creating new one with field '{}'",
+                    key
+                );
+                let xml_content = if key == "USER_DESIGNER" {
+                    format!(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+<BWFXML>
+  <IXML_VERSION>1.0</IXML_VERSION>
+  <USER>
+    <USER_DESIGNER>{}</USER_DESIGNER>
+  </USER>
+</BWFXML>"#,
+                        value
+                    )
+                } else {
+                    // For other fields, use a generic structure
+                    format!(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+<BWFXML>
+  <IXML_VERSION>1.0</IXML_VERSION>
+  <USER>
+    <{}>{}</{}>
+  </USER>
+</BWFXML>"#,
+                        key, value, key
+                    )
+                };
+                chunks.push(MetadataChunk::IXml(xml_content));
                 Ok(())
             }
         }
@@ -478,14 +499,21 @@ impl Codex {
         match &self.metadata {
             Some(Metadata::Wav(chunks)) => chunks.iter().find_map(|chunk| chunk.get_field(key)),
             Some(Metadata::Flac(tag, chunks)) => {
+                // First check Vorbis comments in the metaflac tag
                 let mut result = tag
                     .vorbis_comments()
                     .and_then(|comments| comments.get(key))
                     .and_then(|values| values.first())
                     .map(|s| s.to_string());
 
+                // If not found in Vorbis comments, check only the first relevant chunk (iXML)
                 if result.is_none() {
-                    result = chunks.iter().find_map(|chunk| chunk.get_field(key));
+                    for chunk in chunks.iter() {
+                        if matches!(chunk, MetadataChunk::IXml(_)) {
+                            result = chunk.get_field(key);
+                            break; // Only check the first iXML chunk
+                        }
+                    }
                 }
 
                 result
