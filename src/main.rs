@@ -20,7 +20,7 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/TEMP/CamelGruntsAndRoars HB05_21_1.flac";
+    let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/FOLY MetalFlashli 9004_82_6.flac";
 
     // clean_multi_mono(input_file)?;
 

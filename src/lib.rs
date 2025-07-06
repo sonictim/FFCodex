@@ -110,7 +110,7 @@ pub enum Metadata {
 
     // FLAC has a unique metadata structure with Vorbis comments,
     // picture blocks, etc. that doesn't map well to chunks
-    Flac(metaflac::Tag),
+    Flac(metaflac::Tag, Vec<MetadataChunk>), // FLAC metadata with Vorbis comments
 }
 
 impl Default for Metadata {
@@ -334,12 +334,20 @@ impl Codex {
 
     pub fn parse_metadata(&self) -> R<()> {
         match &self.metadata {
-            Some(Metadata::Flac(tag)) => {
+            Some(Metadata::Flac(tag, chunks)) => {
                 dprintln!("Parsing FLAC metadata");
                 if let Some(comments) = tag.vorbis_comments() {
                     dprintln!("FLAC Vorbis Comments found: {:?}", comments.comments);
                 } else {
                     dprintln!("No Vorbis Comments found in FLAC metadata");
+                }
+                for chunk in chunks {
+                    // if chunk.id() == "SMED" {
+                    //     dprintln!("{:?}", chunk);
+                    // }
+                    dprintln!("Parsing metadata chunk: {:?}", chunk.id());
+                    let map = chunk.parse()?;
+                    dprintln!("Parsed metadata chunk: {:?}", map);
                 }
 
                 return Ok(());
@@ -413,7 +421,7 @@ impl Codex {
                 });
                 Ok(())
             }
-            Metadata::Flac(tag) => {
+            Metadata::Flac(tag, chunks) => {
                 // For FLAC, we need to use metaflac's proper API
                 tag.set_vorbis(key, vec![value.to_string()]);
                 Ok(())
@@ -424,7 +432,7 @@ impl Codex {
     pub fn get_metadata_field(&self, key: &str) -> Option<String> {
         match &self.metadata {
             Some(Metadata::Wav(chunks)) => chunks.iter().find_map(|chunk| chunk.get_field(key)),
-            Some(Metadata::Flac(tag)) => tag
+            Some(Metadata::Flac(tag, chunks)) => tag
                 .vorbis_comments()
                 .and_then(|comments| comments.get(key))
                 .and_then(|values| values.first())

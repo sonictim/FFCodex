@@ -41,8 +41,8 @@ impl Codec for FlacCodec {
         Ok(())
     }
     fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
-        use std::fs;
         use memmap2::MmapOptions;
+        use std::fs;
 
         let file = fs::File::open(file_path)?;
         let file_size = file.metadata()?.len() as usize;
@@ -51,7 +51,7 @@ impl Codec for FlacCodec {
         self.validate_file_format(&mapped_file)?;
 
         let mut cursor = Cursor::new(&mapped_file[..]);
-        
+
         // Skip FLAC marker
         cursor.seek(SeekFrom::Start(4))?;
 
@@ -79,48 +79,60 @@ impl Codec for FlacCodec {
                     cursor.read_exact(&mut streaminfo)?;
 
                     // Parse STREAMINFO according to FLAC spec
-                    sample_rate = ((streaminfo[10] as u32) << 12) 
-                                | ((streaminfo[11] as u32) << 4) 
-                                | ((streaminfo[12] as u32) >> 4);
-                    
+                    sample_rate = ((streaminfo[10] as u32) << 12)
+                        | ((streaminfo[11] as u32) << 4)
+                        | ((streaminfo[12] as u32) >> 4);
+
                     channels = (((streaminfo[12] as u16) >> 1) & 0x07) + 1;
-                    
-                    bits_per_sample = ((((streaminfo[12] as u16) & 0x01) << 4) 
-                                     | ((streaminfo[13] as u16) >> 4)) + 1;
+
+                    bits_per_sample = ((((streaminfo[12] as u16) & 0x01) << 4)
+                        | ((streaminfo[13] as u16) >> 4))
+                        + 1;
 
                     // Total samples (36-bit value)
                     total_samples = ((streaminfo[13] as u64 & 0x0F) << 32)
-                                  | ((streaminfo[14] as u64) << 24)
-                                  | ((streaminfo[15] as u64) << 16)
-                                  | ((streaminfo[16] as u64) << 8)
-                                  | (streaminfo[17] as u64);
+                        | ((streaminfo[14] as u64) << 24)
+                        | ((streaminfo[15] as u64) << 16)
+                        | ((streaminfo[16] as u64) << 8)
+                        | (streaminfo[17] as u64);
                 }
                 VORBIS_COMMENT_BLOCK_TYPE => {
                     // VORBIS_COMMENT block contains metadata including possible description
                     if description.is_empty() {
                         let mut comment_data = vec![0u8; block_size];
                         cursor.read_exact(&mut comment_data)?;
-                        
+
                         let mut comment_cursor = Cursor::new(&comment_data);
-                        
+
                         // Read vendor string length and skip it
                         if let Ok(vendor_length) = comment_cursor.read_u32::<LittleEndian>() {
                             if vendor_length as usize <= comment_data.len() - 4 {
                                 comment_cursor.seek(SeekFrom::Current(vendor_length as i64))?;
-                                
+
                                 // Read number of comments
-                                if let Ok(comment_count) = comment_cursor.read_u32::<LittleEndian>() {
+                                if let Ok(comment_count) = comment_cursor.read_u32::<LittleEndian>()
+                                {
                                     for _ in 0..comment_count {
-                                        if let Ok(comment_length) = comment_cursor.read_u32::<LittleEndian>() {
-                                            if comment_length > 0 && comment_length as usize <= 1024 { // Reasonable limit
-                                                let mut comment = vec![0u8; comment_length as usize];
+                                        if let Ok(comment_length) =
+                                            comment_cursor.read_u32::<LittleEndian>()
+                                        {
+                                            if comment_length > 0 && comment_length as usize <= 1024
+                                            {
+                                                // Reasonable limit
+                                                let mut comment =
+                                                    vec![0u8; comment_length as usize];
                                                 if comment_cursor.read_exact(&mut comment).is_ok() {
-                                                    let comment_str = String::from_utf8_lossy(&comment);
+                                                    let comment_str =
+                                                        String::from_utf8_lossy(&comment);
                                                     if let Some(eq_pos) = comment_str.find('=') {
-                                                        let key = comment_str[..eq_pos].to_lowercase();
+                                                        let key =
+                                                            comment_str[..eq_pos].to_lowercase();
                                                         let value = &comment_str[eq_pos + 1..];
-                                                        
-                                                        if (key == "description" || key == "comment") && !value.trim().is_empty() {
+
+                                                        if (key == "description"
+                                                            || key == "comment")
+                                                            && !value.trim().is_empty()
+                                                        {
                                                             description = value.trim().to_string();
                                                             break;
                                                         }
@@ -159,14 +171,18 @@ impl Codec for FlacCodec {
         };
 
         let duration = if duration_seconds >= 3600.0 {
-            format!("{:.0}:{:02.0}:{:02.0}", 
-                duration_seconds / 3600.0, 
-                (duration_seconds % 3600.0) / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}:{:02.0}",
+                duration_seconds / 3600.0,
+                (duration_seconds % 3600.0) / 60.0,
+                duration_seconds % 60.0
+            )
         } else {
-            format!("{:.0}:{:02.0}", 
-                duration_seconds / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}",
+                duration_seconds / 60.0,
+                duration_seconds % 60.0
+            )
         };
 
         Ok(FileInfo {
@@ -428,7 +444,10 @@ impl Codec for FlacCodec {
 
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
         let tag = Tag::read_from_path(file_path)?;
-        Ok(Metadata::Flac(tag))
+        let input = std::fs::read(file_path)?;
+        let chunks = self.extract_metadata_chunks(&input)?;
+
+        Ok(Metadata::Flac(tag, chunks))
     }
 
     fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
@@ -458,20 +477,41 @@ impl Codec for FlacCodec {
 
                         // Read vendor length and vendor string
                         let vendor_length = data_cursor.read_u32::<LittleEndian>()?;
+                        if vendor_length as usize > data.len() - 4 {
+                            // Invalid vendor length, skip this block
+                            chunks.push(MetadataChunk::Unknown {
+                                id: "FLAC_VORBIS_COMMENT".to_string(),
+                                data: data.to_vec(),
+                            });
+                            continue;
+                        }
+
                         let mut vendor = vec![0u8; vendor_length as usize];
                         data_cursor.read_exact(&mut vendor)?;
 
                         // Read user comment list
+                        if data_cursor.position() + 4 > data.len() as u64 {
+                            // Not enough data for comment count
+                            chunks.push(MetadataChunk::Unknown {
+                                id: "FLAC_VORBIS_COMMENT".to_string(),
+                                data: data.to_vec(),
+                            });
+                            continue;
+                        }
+
                         let comment_list_length = data_cursor.read_u32::<LittleEndian>()?;
 
-                        // Extract key-value pairs
+                        // Extract key-value pairs and check for IXML content
                         let mut text_tags = Vec::new();
-                        let mut comments = String::new();
-                        comments
-                            .push_str(&format!("VENDOR={}\n", String::from_utf8_lossy(&vendor)));
+                        let mut ixml_content = None;
+                        let mut vorbis_comments = Vec::new();
+
+                        // Store vendor information
+                        let vendor_string = String::from_utf8_lossy(&vendor).to_string();
+                        vorbis_comments.push(format!("VENDOR={}", vendor_string));
 
                         for _ in 0..comment_list_length {
-                            if data_cursor.position() >= data.len() as u64 {
+                            if data_cursor.position() + 4 > data.len() as u64 {
                                 break;
                             }
 
@@ -486,23 +526,87 @@ impl Codec for FlacCodec {
                             {
                                 let mut comment_data = vec![0u8; comment_length as usize];
                                 if data_cursor.read_exact(&mut comment_data).is_ok() {
-                                    if let Ok(comment) = String::from_utf8(comment_data) {
-                                        comments.push_str(&format!("{}\n", comment));
+                                    // First check if this is raw IXML data (starts with "iXML" or "<BWFXML>")
+                                    if comment_data.len() > 4
+                                        && (comment_data.starts_with(b"iXML")
+                                            || comment_data.starts_with(b"<BWFXML>")
+                                            || String::from_utf8_lossy(&comment_data)
+                                                .contains("<BWFXML>"))
+                                    {
+                                        // This is raw IXML content
+                                        let ixml_string =
+                                            String::from_utf8_lossy(&comment_data).to_string();
+                                        vorbis_comments
+                                            .push(format!("IXML_RAW_DATA={}", ixml_string));
+                                        ixml_content = Some(ixml_string);
+                                        continue;
+                                    }
 
-                                        // Also create TextTag entries for better cross-format compatibility
+                                    // Try to parse as UTF-8 string
+                                    if let Ok(comment) = String::from_utf8(comment_data.clone()) {
+                                        vorbis_comments.push(comment.clone());
+
+                                        // Check if this is a key=value pair
                                         if let Some(idx) = comment.find('=') {
-                                            let key = comment[0..idx].trim().to_string();
-                                            let value = comment[idx + 1..].trim().to_string();
-                                            text_tags.push(MetadataChunk::TextTag { key, value });
+                                            let key = comment[0..idx].trim();
+                                            let value = comment[idx + 1..].trim();
+
+                                            // Check for IXML metadata specifically
+                                            if key.eq_ignore_ascii_case("IXML") {
+                                                // This is IXML content embedded as key=value
+                                                ixml_content = Some(value.to_string());
+                                            } else {
+                                                // Regular text metadata
+                                                text_tags.push(MetadataChunk::TextTag {
+                                                    key: key.to_string(),
+                                                    value: value.to_string(),
+                                                });
+                                            }
+                                        } else if comment.contains("<BWFXML>")
+                                            || comment.starts_with("iXML")
+                                        {
+                                            // This might be IXML content without a key prefix
+                                            ixml_content = Some(comment);
+                                        }
+                                    } else {
+                                        // Binary data that's not UTF-8 - check if it might be IXML
+                                        let data_string = String::from_utf8_lossy(&comment_data);
+                                        if data_string.contains("<BWFXML>")
+                                            || data_string.starts_with("iXML")
+                                        {
+                                            ixml_content = Some(data_string.to_string());
+                                            vorbis_comments
+                                                .push(format!("IXML_BINARY_DATA={}", data_string));
+                                        } else {
+                                            // Store as unknown binary data
+                                            use base64::{Engine as _, engine::general_purpose};
+                                            vorbis_comments.push(format!(
+                                                "BINARY_DATA={}",
+                                                general_purpose::STANDARD.encode(&comment_data)
+                                            ));
                                         }
                                     }
                                 }
                             }
                         }
 
-                        // Add both formats
-                        chunks.push(MetadataChunk::IXml(comments));
+                        // Add IXML chunk if found
+                        if let Some(ixml) = ixml_content {
+                            chunks.push(MetadataChunk::IXml(ixml));
+                        }
+
+                        // Add text tags for all other metadata
                         chunks.extend(text_tags);
+
+                        // Also preserve the raw Vorbis comment as an unknown chunk for completeness
+                        // This ensures we don't lose any metadata during round-trip operations
+                        if !vorbis_comments.is_empty() {
+                            let vorbis_text = vorbis_comments.join("\n");
+                            chunks.push(MetadataChunk::Unknown {
+                                id: "FLAC_VORBIS_COMMENTS".to_string(),
+                                data: vorbis_text.into_bytes(),
+                            });
+                        }
                     }
                 }
                 PICTURE_BLOCK_TYPE => {
@@ -548,8 +652,46 @@ impl Codec for FlacCodec {
                         });
                     }
                 }
+                // Handle Soundminer and other application-specific metadata blocks
+                1 => {
+                    // APPLICATION block - check if it's Soundminer or contains IXML
+                    if data.len() >= 4 {
+                        // First 4 bytes should be the application ID
+                        let app_id = &data[0..4];
+                        if app_id == b"SMED" || app_id == b"smgz" {
+                            // This is a Soundminer block, extract IXML content only
+                            let content = String::from_utf8_lossy(&data[4..]);
+                            if content.contains("<BWFXML>") || content.contains("iXML") {
+                                // Extract IXML content - this is what you actually need
+                                chunks.push(MetadataChunk::IXml(content.to_string()));
+                            }
+                            // Don't preserve the binary SMED chunk since it's not useful
+                        } else {
+                            // Other application block - check for IXML in non-Soundminer apps
+                            let content = String::from_utf8_lossy(&data[4..]);
+                            if content.contains("<BWFXML>") || content.contains("iXML") {
+                                chunks.push(MetadataChunk::IXml(content.to_string()));
+                            }
+                            chunks.push(MetadataChunk::Unknown {
+                                id: format!("FLAC_APPLICATION_{}", String::from_utf8_lossy(app_id)),
+                                data,
+                            });
+                        }
+                    } else {
+                        chunks.push(MetadataChunk::Unknown {
+                            id: "FLAC_APPLICATION".to_string(),
+                            data,
+                        });
+                    }
+                }
                 // Add other metadata types as needed
                 _ => {
+                    // Check if the data contains IXML content regardless of block type
+                    let data_string = String::from_utf8_lossy(&data);
+                    if data_string.contains("<BWFXML>") || data_string.contains("iXML") {
+                        chunks.push(MetadataChunk::IXml(data_string.to_string()));
+                    }
+
                     chunks.push(MetadataChunk::Unknown {
                         id: format!("FLAC_{}", block_type),
                         data,
@@ -566,7 +708,7 @@ impl Codec for FlacCodec {
             return Err(anyhow!("Cannot embed None Metadata"));
         };
         let source_tag = match metadata {
-            Metadata::Flac(tag) => tag,
+            Metadata::Flac(tag, chunks) => tag,
             _ => return Err(anyhow!("Unsupported metadata format")),
         };
         let mut dest_tags = Tag::read_from_path(file_path)?;
@@ -626,28 +768,81 @@ impl Codec for FlacCodec {
         let mut picture_chunks = Vec::new();
         let mut other_chunks = Vec::new();
         let mut text_tags = Vec::new();
+        let mut ixml_chunks = Vec::new();
 
         for chunk in chunks {
             match chunk {
-                MetadataChunk::IXml(_) => vorbis_chunks.push(chunk.clone()),
+                MetadataChunk::IXml(_) => ixml_chunks.push(chunk.clone()),
                 MetadataChunk::Picture { .. } => picture_chunks.push(chunk.clone()),
                 MetadataChunk::TextTag { .. } => text_tags.push(chunk.clone()),
+                MetadataChunk::Unknown { id, .. } if id == "FLAC_VORBIS_COMMENTS" => {
+                    vorbis_chunks.push(chunk.clone())
+                }
                 _ => other_chunks.push(chunk.clone()),
             }
         }
 
-        // Group TextTag entries into a Vorbis comment if not already present
-        if !text_tags.is_empty() && vorbis_chunks.is_empty() {
-            let mut xml = String::from_utf8_lossy(b"VENDOR=FFCodex\n").to_string();
-            for tag in &text_tags {
-                if let MetadataChunk::TextTag { key, value } = tag {
-                    xml.push_str(&format!("{}={}\n", key, value));
+        // Create Vorbis comment blocks from various sources
+        // 1. If we have IXML chunks, embed them as IXML= comments
+        // 2. If we have TextTag chunks, embed them as individual comments
+        // 3. If we have existing Vorbis comment chunks, preserve them
+
+        if !ixml_chunks.is_empty() || !text_tags.is_empty() || vorbis_chunks.is_empty() {
+            // Build a new Vorbis comment block
+            let mut vendor = b"FFCodex".to_vec();
+            let mut comments = Vec::new();
+
+            // Add existing vorbis comments if any
+            for chunk in &vorbis_chunks {
+                if let MetadataChunk::Unknown { data, .. } = chunk {
+                    let vorbis_text = String::from_utf8_lossy(data);
+                    for line in vorbis_text.lines() {
+                        if line.starts_with("VENDOR=") {
+                            vendor = line.trim_start_matches("VENDOR=").as_bytes().to_vec();
+                        } else if !line.is_empty() {
+                            comments.push(line.as_bytes().to_vec());
+                        }
+                    }
                 }
             }
-            vorbis_chunks.push(MetadataChunk::IXml(xml));
+
+            // Add IXML content as IXML= comments
+            for chunk in &ixml_chunks {
+                if let MetadataChunk::IXml(ixml_content) = chunk {
+                    let ixml_comment = format!("IXML={}", ixml_content);
+                    comments.push(ixml_comment.as_bytes().to_vec());
+                }
+            }
+
+            // Add individual text tags
+            for tag in &text_tags {
+                if let MetadataChunk::TextTag { key, value } = tag {
+                    let comment = format!("{}={}", key, value);
+                    comments.push(comment.as_bytes().to_vec());
+                }
+            }
+
+            // Create the Vorbis comment block
+            if !comments.is_empty() || !vendor.is_empty() {
+                let mut vorbis_data = Cursor::new(Vec::new());
+                vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
+                vorbis_data.write_all(&vendor)?;
+                vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
+
+                for comment in comments {
+                    vorbis_data.write_u32::<LittleEndian>(comment.len() as u32)?;
+                    vorbis_data.write_all(&comment)?;
+                }
+
+                vorbis_chunks.clear();
+                vorbis_chunks.push(MetadataChunk::Unknown {
+                    id: "GENERATED_VORBIS_COMMENT".to_string(),
+                    data: vorbis_data.into_inner(),
+                });
+            }
         }
 
-        // Collect all metadata blocks
+        // Collect all metadata blocks (excluding the individual text tags and ixml since they're now in vorbis)
         let all_chunks: Vec<&MetadataChunk> = vorbis_chunks
             .iter()
             .chain(picture_chunks.iter())
@@ -659,30 +854,10 @@ impl Codec for FlacCodec {
             let is_last = i == all_chunks.len() - 1;
 
             let (block_type, data) = match chunk {
-                MetadataChunk::IXml(xml_string) => {
-                    // Convert IXml string to Vorbis comment format
-                    let mut vorbis_data = Cursor::new(Vec::new());
-                    let mut vendor = b"FFCodex".to_vec();
-                    let mut comments = Vec::new();
-
-                    for line in xml_string.lines() {
-                        if line.starts_with("VENDOR=") {
-                            vendor = line.trim_start_matches("VENDOR=").as_bytes().to_vec();
-                        } else if !line.is_empty() {
-                            comments.push(line.as_bytes().to_vec());
-                        }
-                    }
-
-                    vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
-                    vorbis_data.write_all(&vendor)?;
-                    vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
-
-                    for comment in comments {
-                        vorbis_data.write_u32::<LittleEndian>(comment.len() as u32)?;
-                        vorbis_data.write_all(&comment)?;
-                    }
-
-                    (VORBIS_COMMENT_BLOCK_TYPE, vorbis_data.into_inner())
+                MetadataChunk::Unknown { id, data }
+                    if id == "GENERATED_VORBIS_COMMENT" || id == "FLAC_VORBIS_COMMENTS" =>
+                {
+                    (VORBIS_COMMENT_BLOCK_TYPE, data.clone())
                 }
                 MetadataChunk::Picture {
                     mime_type,
@@ -711,7 +886,10 @@ impl Codec for FlacCodec {
                     (PICTURE_BLOCK_TYPE, data.clone())
                 }
                 MetadataChunk::TextTag { .. } => {
-                    continue; // Skip individual text tags
+                    continue; // Skip individual text tags (they're now in vorbis comments)
+                }
+                MetadataChunk::IXml { .. } => {
+                    continue; // Skip IXML chunks (they're now in vorbis comments)
                 }
                 MetadataChunk::Unknown { id, data } => {
                     let block_type = if id.starts_with("FLAC_") {
