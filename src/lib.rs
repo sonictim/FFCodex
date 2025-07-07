@@ -102,7 +102,7 @@ pub struct FileInfo {
     pub description: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Metadata {
     // Chunk-based formats (WAV, AIFF, WavPack) all use the same structure
     // since they share similar metadata chunk architectures
@@ -223,59 +223,22 @@ impl Codex {
                 if output_file.to_lowercase().ends_with(".wv") {
                     // Extract metadata chunks for WavPack
                     if let Some(Metadata::Wav(chunks)) = &self.metadata {
-                        dprintln!(
-                            "🎯 Codex export: WavPack detected with {} metadata chunks",
-                            chunks.len()
-                        );
-
-                        // Show the order of chunks being passed to the codec
-                        for (i, chunk) in chunks.iter().enumerate() {
-                            match chunk {
-                                MetadataChunk::TextTag { key, .. } => {
-                                    dprintln!(
-                                        "🎯 Codex export: Passing chunk [{}] TextTag: {}",
-                                        i,
-                                        key
-                                    );
-                                }
-                                MetadataChunk::Picture { description, .. } => {
-                                    dprintln!(
-                                        "🎯 Codex export: Passing chunk [{}] Picture: {}",
-                                        i,
-                                        description
-                                    );
-                                }
-                                MetadataChunk::Unknown { id, .. } => {
-                                    dprintln!(
-                                        "🎯 Codex export: Passing chunk [{}] Unknown: {}",
-                                        i,
-                                        id
-                                    );
-                                }
-                                _ => {
-                                    dprintln!(
-                                        "🎯 Codex export: Passing chunk [{}] Other: {}",
-                                        i,
-                                        chunk.id()
-                                    );
-                                }
-                            }
-                        }
-
                         // Create a dummy input buffer to use with embed_metadata_chunks
                         let encoded_audio = codec.encode(&self.buffer)?;
                         let encoded_with_metadata =
                             codec.embed_metadata_chunks(&encoded_audio, chunks)?;
                         std::fs::write(temp_path, encoded_with_metadata)?;
                     } else {
-                        dprintln!("🎯 Codex export: WavPack detected but no WAV metadata to embed");
                         // No metadata to embed, just encode normally
                         codec.encode_file(&self.buffer, temp_path)?;
                     }
                 } else {
                     // For other formats, use the original approach
                     codec.encode_file(&self.buffer, temp_path)?;
-                    codec.embed_metadata_to_file(temp_path, &self.metadata)?;
+
+                    // Convert metadata format if needed for cross-format export
+                    let converted_metadata = self.convert_metadata_for_export(output_file)?;
+                    codec.embed_metadata_to_file(temp_path, &converted_metadata)?;
                 }
             }
             Err(error) => return Err(error),
@@ -333,22 +296,16 @@ impl Codex {
     }
 
     pub fn parse_metadata(&self) -> R<()> {
-        dprintln!("Parsing metadata for file: {}", self.path.display());
         match &self.metadata {
             Some(Metadata::Flac(tag, chunks)) => {
-                dprintln!("Parsing FLAC metadata");
-                if let Some(comments) = tag.vorbis_comments() {
-                    dprintln!("FLAC Vorbis Comments found: {:?}", comments.comments);
-                } else {
-                    dprintln!("No Vorbis Comments found in FLAC metadata");
+                if let Some(_comments) = tag.vorbis_comments() {
+                    // Vorbis comments found and processed
                 }
 
                 // Only parse the first relevant metadata chunk (iXML or Vorbis) for FLAC
                 for chunk in chunks {
                     if matches!(chunk, MetadataChunk::IXml(_)) {
-                        dprintln!("Parsing first iXML metadata chunk: {:?}", chunk.id());
-                        let map = chunk.parse()?;
-                        dprintln!("Parsed iXML metadata chunk: {:?}", map);
+                        let _map = chunk.parse()?;
                         break; // Stop after parsing the first iXML chunk
                     }
                 }
@@ -357,16 +314,10 @@ impl Codex {
             }
             Some(Metadata::Wav(chunks)) => {
                 for chunk in chunks {
-                    // if chunk.id() == "SMED" {
-                    //     dprintln!("{:?}", chunk);
-                    // }
-                    dprintln!("Parsing metadata chunk: {:?}", chunk.id());
-                    let map = chunk.parse()?;
-                    dprintln!("Parsed metadata chunk: {:?}", map);
+                    let _map = chunk.parse()?;
                 }
             }
             None => {
-                dprintln!("No metadata available to parse");
                 return Ok(());
             }
         }
@@ -380,30 +331,9 @@ impl Codex {
 
         match metadata {
             Metadata::Wav(chunks) => {
-                dprintln!(
-                    "🔍 set_metadata_field: Looking for key '{}' in {} chunks",
-                    key,
-                    chunks.len()
-                );
-
-                // Debug: Show what chunks we have
-                for (i, chunk) in chunks.iter().enumerate() {
-                    dprintln!(
-                        "🔍 Chunk [{}]: {} (has field: {})",
-                        i,
-                        chunk.id(),
-                        chunk.get_field(key).is_some()
-                    );
-                }
-
                 // Try to find existing chunk with this field
                 for chunk in chunks.iter_mut() {
                     if chunk.get_field(key).is_some() {
-                        dprintln!(
-                            "✅ Found existing chunk {} with field '{}', updating...",
-                            chunk.id(),
-                            key
-                        );
                         return chunk.set_field(key, value);
                     }
                 }
@@ -411,12 +341,10 @@ impl Codex {
                 // Look for iXML chunk to add the field to
                 for chunk in chunks.iter_mut() {
                     if chunk.id() == "iXML" {
-                        dprintln!("📝 Adding field '{}' to existing iXML chunk", key);
                         return chunk.set_field(key, value);
                     }
                 }
 
-                dprintln!("➕ Creating new TextTag chunk for key '{}'", key);
                 // Create new TextTag chunk if field not found
                 chunks.push(MetadataChunk::TextTag {
                     key: key.to_string(),
@@ -429,42 +357,15 @@ impl Codex {
                 // Also update the metaflac Vorbis comment
                 tag.set_vorbis(key, vec![value.to_string()]);
 
-                dprintln!(
-                    "🔍 FLAC set_metadata_field: Looking for key '{}' in first relevant chunk only",
-                    key
-                );
-
                 // Find and update only the first relevant metadata chunk (iXML)
                 for chunk in chunks.iter_mut() {
                     if matches!(chunk, MetadataChunk::IXml(_)) {
-                        dprintln!("📝 Found first iXML chunk, updating field '{}'", key);
-
-                        // Debug: Print the chunk content before and after update
-                        if let MetadataChunk::IXml(content) = chunk {
-                            dprintln!(
-                                "🔍 iXML content before update (first 200 chars): {}",
-                                &content[..content.len().min(200)]
-                            );
-                        }
-
                         let result = chunk.set_field(key, value);
-
-                        if let MetadataChunk::IXml(content) = chunk {
-                            dprintln!(
-                                "🔍 iXML content after update (first 200 chars): {}",
-                                &content[..content.len().min(200)]
-                            );
-                        }
-
                         return result;
                     }
                 }
 
                 // If no iXML chunk exists, create a minimal one with just this field
-                dprintln!(
-                    "➕ No iXML chunk found, creating new one with field '{}'",
-                    key
-                );
                 let xml_content = if key == "USER_DESIGNER" {
                     format!(
                         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -522,6 +423,32 @@ impl Codex {
         }
     }
 
+    pub fn remove_soundminer_metadata_chunk(&mut self) -> R<()> {
+        if let Some(metadata) = &mut self.metadata {
+            match metadata {
+                Metadata::Wav(chunks) => {
+                    // Remove all Soundminer-related chunks from WAV metadata
+                    chunks.retain(|chunk| {
+                        let chunk_id = chunk.id();
+                        chunk_id != "SMED" && chunk_id != "SMRD" && chunk_id != "SMPL"
+                    });
+                }
+                Metadata::Flac(tag, chunks) => {
+                    // Remove all Soundminer-related chunks from the chunks vector
+                    chunks.retain(|chunk| {
+                        let chunk_id = chunk.id();
+                        chunk_id != "SMED" && chunk_id != "SMRD" && chunk_id != "SMPL"
+                    });
+
+                    // For FLAC, also remove APPLICATION blocks since SMED data might be stored there
+                    // Note: This removes ALL APPLICATION blocks, which is a conservative approach
+                    // to ensure Soundminer data is completely removed
+                    tag.remove_blocks(metaflac::BlockType::Application);
+                }
+            }
+        }
+        Ok(())
+    }
     // pub fn remove_metadata_field(&mut self, key: &str) -> R<bool> {
     //     match &mut self.metadata {
     //         Some(Metadata::Wav(chunks)) => {
@@ -555,6 +482,33 @@ impl Codex {
             )
         })?;
         codec.get_file_info(self.path.to_str().unwrap())
+    }
+
+    // Helper method to convert metadata format for cross-format export
+    fn convert_metadata_for_export(&self, output_file: &str) -> R<Option<Metadata>> {
+        let Some(metadata) = &self.metadata else {
+            return Ok(None);
+        };
+
+        // Determine target format based on file extension
+        let is_wav_format = output_file.to_lowercase().ends_with(".wav")
+            || output_file.to_lowercase().ends_with(".wv");
+        let is_flac_format = output_file.to_lowercase().ends_with(".flac");
+
+        match (metadata, is_wav_format, is_flac_format) {
+            // FLAC metadata to WAV format conversion
+            (Metadata::Flac(_, chunks), true, false) => Ok(Some(Metadata::Wav(chunks.clone()))),
+            // WAV metadata to FLAC format conversion
+            (Metadata::Wav(chunks), false, true) => {
+                // For FLAC, we need to create a Tag, but for now just use empty tag
+                // The chunks will contain the actual metadata
+                use metaflac::Tag;
+                let tag = Tag::new();
+                Ok(Some(Metadata::Flac(tag, chunks.clone())))
+            }
+            // Same format, no conversion needed
+            _ => Ok(self.metadata.clone()),
+        }
     }
 }
 

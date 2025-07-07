@@ -430,8 +430,6 @@ impl Codec for WavCodec {
     }
 
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        dprintln!("extract_file_metadata_chunks - Processing {}", file_path);
-
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
 
@@ -443,7 +441,7 @@ impl Codec for WavCodec {
             let mut header = [0u8; 12];
             if cursor.read_exact(&mut header).is_ok() {
                 if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-                    dprintln!("WARNING: Not a valid WAVE file");
+                    // Not a valid WAVE file
                 } else {
                     // Look for the fmt chunk
                     while cursor.position() < mapped_file.len() as u64 {
@@ -463,26 +461,13 @@ impl Codec for WavCodec {
                                 // Channel count is right after format tag
                                 let channel_count = cursor.read_u16::<LittleEndian>()?;
 
-                                dprintln!(
-                                    "extract_file_metadata_chunks - File has {} channels in fmt chunk",
-                                    channel_count
-                                );
-
                                 // Validate the channel count
                                 if !(1..=128).contains(&channel_count) {
-                                    dprintln!(
-                                        "WARNING: Suspicious channel count: {}",
-                                        channel_count
-                                    );
+                                    // Suspicious channel count
                                 }
 
                                 // Get sample rate while we're at it
-                                let sample_rate = cursor.read_u32::<LittleEndian>()?;
-                                dprintln!(
-                                    "Sample rate: {} Hz, Format tag: {}",
-                                    sample_rate,
-                                    format_tag
-                                );
+                                let _sample_rate = cursor.read_u32::<LittleEndian>()?;
 
                                 // Don't need to read further in fmt chunk
                                 break;

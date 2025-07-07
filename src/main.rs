@@ -20,7 +20,7 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK.wav";
+    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.wav";
 
     // clean_multi_mono(input_file)?;
 
@@ -37,7 +37,7 @@ fn main() -> R<()> {
     //     elapsed_time.as_secs_f32()
     // );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
 
     // // flac_debug(input_file)?;
 
@@ -46,41 +46,11 @@ fn main() -> R<()> {
     let mut c = Codex::new(input_file)?.decode()?.extract_metadata()?;
 
     c.parse_metadata()?;
-
+    println!("{:?}", c.get_metadata_field("USER_DESIGNER"));
     c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
     c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
-
-    // Test reading the field back
-    match c.get_metadata_field("USER_DESIGNER") {
-        Some(value) => println!("✅ USER_DESIGNER field read back: '{}'", value),
-        None => println!("❌ USER_DESIGNER field not found"),
-    }
-
-    if let Some(ref metadata) = c.metadata {
-        match metadata {
-            Metadata::Wav(chunks) => {
-                let new_metadata = chunks
-                    .iter()
-                    .filter_map(|chunk| {
-                        if chunk.id() == "SMED" {
-                            None
-                        } else {
-                            Some(chunk.clone())
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                c.metadata = Some(Metadata::Wav(new_metadata));
-            }
-            _ => {
-                println!("No Wav metadata found.");
-            }
-        }
-    } else {
-        println!("No metadata found.");
-    }
-
-    // c.convert_dual_mono()?;
+    c.remove_soundminer_metadata_chunk()?;
+    c.convert_dual_mono()?;
     c.export(output_file)?;
     // clean_multi_mono(input_file)?;
 
