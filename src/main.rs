@@ -20,7 +20,7 @@ fn main() -> R<()> {
     //     "/Users/tfarrell/Desktop/subset test/CRWDChld_PlaygroundVocals01_TF_TJFR.aif"
     // };
 
-    let input_file = "/Users/tfarrell/Desktop/FOLY MetalFlashli 9004_82_6.flac";
+    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK.wav";
 
     // clean_multi_mono(input_file)?;
 
@@ -37,7 +37,7 @@ fn main() -> R<()> {
     //     elapsed_time.as_secs_f32()
     // );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
 
     // // flac_debug(input_file)?;
 
@@ -47,7 +47,8 @@ fn main() -> R<()> {
 
     c.parse_metadata()?;
 
-    c.set_metadata_field("USER_DESIGNER", "Tim Farrell")?;
+    c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
+    c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
 
     // Test reading the field back
     match c.get_metadata_field("USER_DESIGNER") {

@@ -546,11 +546,22 @@ impl Codec for FlacCodec {
                                 if !found_relevant_metadata {
                                     // Parse iXML data - this is what we really want
                                     if let Ok(xml_string) = String::from_utf8(app_data.to_vec()) {
-                                        dprintln!("📖 Found iXML block with {} bytes: {}", xml_string.len(), &xml_string[..xml_string.len().min(200)]);
+                                        dprintln!(
+                                            "📖 Found iXML block with {} bytes: {}",
+                                            xml_string.len(),
+                                            &xml_string[..xml_string.len().min(200)]
+                                        );
                                         chunks.push(MetadataChunk::IXml(xml_string));
                                         found_relevant_metadata = true; // Mark that we found our metadata
                                     }
                                 }
+                            }
+                            b"smgz" | b"SMED" | b"SMRD" | b"SMPL" => {
+                                // Skip SMED (Soundminer) blocks - we don't process or re-embed these
+                                dprintln!(
+                                    "📖 Found SMED/Soundminer block with ID {:?}, skipping (not processed)",
+                                    String::from_utf8_lossy(app_id)
+                                );
                             }
                             _ => {
                                 // Skip all other application blocks - we only care about iXML
@@ -578,7 +589,10 @@ impl Codec for FlacCodec {
             _ => return Err(anyhow!("Unsupported metadata format")),
         };
 
-        dprintln!("embed_metadata_to_file: Starting with {} chunks", chunks.len());
+        dprintln!(
+            "embed_metadata_to_file: Starting with {} chunks",
+            chunks.len()
+        );
 
         // Use metaflac to safely write metadata blocks
         let mut dest_tag = Tag::read_from_path(file_path).unwrap_or_else(|_| Tag::new());
@@ -612,18 +626,37 @@ impl Codec for FlacCodec {
 
         // Add blocks from the source tag, but skip Application blocks we're going to replace
         for block in tag.blocks() {
-            dprintln!("embed_metadata_to_file: Processing source tag block: {:?}", std::mem::discriminant(block));
+            dprintln!(
+                "embed_metadata_to_file: Processing source tag block: {:?}",
+                std::mem::discriminant(block)
+            );
             match block {
                 Block::VorbisComment(_) | Block::Picture(_) => {
                     dprintln!("embed_metadata_to_file: Adding block from source tag");
                     dest_tag.push_block(block.clone());
                 }
                 Block::Application(app_block) => {
-                    if !replacing_app_ids.contains(&app_block.id) {
-                        dprintln!("embed_metadata_to_file: Adding APPLICATION block from source tag with ID: {:?}", String::from_utf8_lossy(&app_block.id));
+                    // Skip SMED (Soundminer) blocks - do not re-embed them
+                    if app_block.id == b"smgz"
+                        || app_block.id == b"SMED"
+                        || app_block.id == b"SMRD"
+                        || app_block.id == b"SMPL"
+                    {
+                        dprintln!(
+                            "embed_metadata_to_file: Skipping SMED/Soundminer APPLICATION block with ID: {:?}",
+                            String::from_utf8_lossy(&app_block.id)
+                        );
+                    } else if !replacing_app_ids.contains(&app_block.id) {
+                        dprintln!(
+                            "embed_metadata_to_file: Adding APPLICATION block from source tag with ID: {:?}",
+                            String::from_utf8_lossy(&app_block.id)
+                        );
                         dest_tag.push_block(block.clone());
                     } else {
-                        dprintln!("embed_metadata_to_file: Skipping APPLICATION block from source tag with ID: {:?} (will be replaced)", String::from_utf8_lossy(&app_block.id));
+                        dprintln!(
+                            "embed_metadata_to_file: Skipping APPLICATION block from source tag with ID: {:?} (will be replaced)",
+                            String::from_utf8_lossy(&app_block.id)
+                        );
                     }
                 }
                 _ => {}
@@ -635,14 +668,32 @@ impl Codec for FlacCodec {
             dprintln!("embed_metadata_to_file: Processing chunk: {:?}", chunk);
             match chunk {
                 MetadataChunk::IXml(xml_string) => {
-                    dprintln!("embed_metadata_to_file: Processing iXML chunk with {} bytes", xml_string.len());
-                    dprintln!("embed_metadata_to_file: XML content (first 100 chars): {}", &xml_string[..xml_string.len().min(100)]);
-                    dprintln!("embed_metadata_to_file: Contains <?xml: {}", xml_string.contains("<?xml"));
-                    dprintln!("embed_metadata_to_file: Contains <BWFXML>: {}", xml_string.contains("<BWFXML>"));
-                    dprintln!("embed_metadata_to_file: Contains <BWF_IXML: {}", xml_string.contains("<BWF_IXML"));
-                    
+                    dprintln!(
+                        "embed_metadata_to_file: Processing iXML chunk with {} bytes",
+                        xml_string.len()
+                    );
+                    dprintln!(
+                        "embed_metadata_to_file: XML content (first 100 chars): {}",
+                        &xml_string[..xml_string.len().min(100)]
+                    );
+                    dprintln!(
+                        "embed_metadata_to_file: Contains <?xml: {}",
+                        xml_string.contains("<?xml")
+                    );
+                    dprintln!(
+                        "embed_metadata_to_file: Contains <BWFXML>: {}",
+                        xml_string.contains("<BWFXML>")
+                    );
+                    dprintln!(
+                        "embed_metadata_to_file: Contains <BWF_IXML: {}",
+                        xml_string.contains("<BWF_IXML")
+                    );
+
                     // Check if this is proper iXML data (contains XML structure)
-                    if xml_string.contains("<?xml") || xml_string.contains("<BWFXML>") || xml_string.contains("<BWF_IXML") {
+                    if xml_string.contains("<?xml")
+                        || xml_string.contains("<BWFXML>")
+                        || xml_string.contains("<BWF_IXML")
+                    {
                         dprintln!("embed_metadata_to_file: Creating iXML APPLICATION block");
                         // This is iXML data - create APPLICATION block
                         let app_block = metaflac::block::Application {
@@ -776,6 +827,10 @@ impl Codec for FlacCodec {
 
         for chunk in chunks {
             match chunk {
+                MetadataChunk::Soundminer(_) => {
+                    // Skip SMED (Soundminer) chunks - do not include them in FLAC embedding
+                    continue;
+                }
                 MetadataChunk::IXml(_) => vorbis_chunks.push(chunk.clone()),
                 MetadataChunk::Picture { .. } => picture_chunks.push(chunk.clone()),
                 MetadataChunk::TextTag { .. } => text_tags.push(chunk.clone()),
@@ -806,6 +861,10 @@ impl Codec for FlacCodec {
             let is_last = i == all_chunks.len() - 1;
 
             let (block_type, data) = match chunk {
+                MetadataChunk::Soundminer(_) => {
+                    // Skip SMED (Soundminer) blocks - do not embed them in FLAC files
+                    continue;
+                }
                 MetadataChunk::IXml(xml_string) => {
                     // Convert IXml string to Vorbis comment format
                     let mut vorbis_data = Cursor::new(Vec::new());
