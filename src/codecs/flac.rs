@@ -527,8 +527,7 @@ impl Codec for FlacCodec {
                             }
                         }
 
-                        // Add both formats
-                        chunks.push(MetadataChunk::IXml(comments));
+                        // Add only the TextTag format - Vorbis comments are not iXML
                         chunks.extend(text_tags);
                         found_relevant_metadata = true; // Stop after finding first relevant metadata
                     }
@@ -616,22 +615,25 @@ impl Codec for FlacCodec {
             }
         }
 
-        // Add blocks from the source tag, but skip Application blocks we're going to replace
+        // Add only Application blocks from the source tag that we're not replacing
+        // We skip VorbisComment and Picture blocks since we'll recreate them from chunks
         for block in tag.blocks() {
             match block {
-                Block::VorbisComment(_) | Block::Picture(_) => {
-                    dest_tag.push_block(block.clone());
-                }
                 Block::Application(app_block) => {
                     if !replacing_app_ids.contains(&app_block.id) {
                         dest_tag.push_block(block.clone());
-                    } else {
-                        // Skip blocks that will be replaced
                     }
                 }
-                _ => {}
+                _ => {
+                    // Skip other blocks - we'll recreate VorbisComment and Picture from chunks
+                }
             }
         }
+
+        // Consolidate all text-based metadata into a single VorbisComment block
+        let mut consolidated_vorbis_comment = metaflac::block::VorbisComment::new();
+        consolidated_vorbis_comment.vendor_string = "FFCodex".to_string();
+        let mut has_vorbis_data = false;
 
         // Process chunks and convert them to metaflac blocks
         for chunk in chunks {
@@ -650,15 +652,14 @@ impl Codec for FlacCodec {
                         dest_tag.push_block(Block::Application(app_block));
                     } else {
                         // This is Vorbis comment data (legacy format)
-                        let mut vorbis_comment = metaflac::block::VorbisComment::new();
-
+                        has_vorbis_data = true;
                         for line in xml_string.lines() {
                             if line.starts_with("VENDOR=") {
-                                vorbis_comment.vendor_string =
+                                consolidated_vorbis_comment.vendor_string =
                                     line.trim_start_matches("VENDOR=").to_string();
                             } else if !line.is_empty() && line.contains('=') {
                                 if let Some((key, value)) = line.split_once('=') {
-                                    vorbis_comment
+                                    consolidated_vorbis_comment
                                         .comments
                                         .entry(key.to_string())
                                         .or_default()
@@ -666,9 +667,16 @@ impl Codec for FlacCodec {
                                 }
                             }
                         }
-
-                        dest_tag.push_block(Block::VorbisComment(vorbis_comment));
                     }
+                }
+                MetadataChunk::TextTag { key, value } => {
+                    // Add to consolidated Vorbis comment
+                    has_vorbis_data = true;
+                    consolidated_vorbis_comment
+                        .comments
+                        .entry(key.clone())
+                        .or_default()
+                        .push(value.clone());
                 }
                 MetadataChunk::Picture {
                     mime_type,
@@ -707,16 +715,6 @@ impl Codec for FlacCodec {
                     }
                     // Skip other unknown blocks for now
                 }
-                MetadataChunk::TextTag { key, value } => {
-                    // Create a new VorbisComment block or add to existing one
-                    let mut vorbis_comment = metaflac::block::VorbisComment::new();
-                    vorbis_comment
-                        .comments
-                        .entry(key.clone())
-                        .or_default()
-                        .push(value.clone());
-                    dest_tag.push_block(Block::VorbisComment(vorbis_comment));
-                }
                 MetadataChunk::Soundminer(data) => {
                     // Preserve Soundminer chunks as APPLICATION blocks
                     // Use "smgz" as the application ID for Soundminer data
@@ -730,6 +728,11 @@ impl Codec for FlacCodec {
                     // Skip other chunk types for now
                 }
             }
+        }
+
+        // Add the consolidated VorbisComment block only if we have Vorbis data
+        if has_vorbis_data {
+            dest_tag.push_block(Block::VorbisComment(consolidated_vorbis_comment));
         }
 
         // Write the metadata back to the file

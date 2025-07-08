@@ -457,7 +457,7 @@ impl Codec for WavCodec {
                             if chunk_size >= 16 {
                                 // Ensure fmt chunk is at least standard size
                                 // Format type
-                                let format_tag = cursor.read_u16::<LittleEndian>()?;
+                                let _format_tag = cursor.read_u16::<LittleEndian>()?;
                                 // Channel count is right after format tag
                                 let channel_count = cursor.read_u16::<LittleEndian>()?;
 

@@ -170,6 +170,18 @@ impl Codex {
         Ok(self)
     }
 
+    pub fn embed_metadata(self, file_path: &str) -> R<Self> {
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No codec available for encoding metadata to file: {}",
+                self.path.display()
+            )
+        })?;
+        codec.embed_metadata_to_file(file_path, &self.metadata)?;
+
+        Ok(self)
+    }
+
     // pub fn new(input_file: &str) -> Self {
     //     let mut codex = Self::default();
     //     match codex.open(input_file) {
