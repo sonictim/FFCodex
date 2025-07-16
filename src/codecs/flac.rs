@@ -459,11 +459,11 @@ impl Codec for FlacCodec {
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
-        
+
         // First, try to parse FLAC metadata blocks using metaflac
         let temp_file = std::env::temp_dir().join("temp_flac_metadata");
         std::fs::write(&temp_file, input)?;
-        
+
         if let Ok(tag) = Tag::read_from_path(&temp_file) {
             // Parse Vorbis comments
             if let Some(comments) = tag.vorbis_comments() {
@@ -475,50 +475,50 @@ impl Codec for FlacCodec {
                 }
             }
         }
-        
+
         // Clean up temp file
         let _ = std::fs::remove_file(&temp_file);
-        
+
         // Also parse any embedded chunks manually from the FLAC stream
         let mut cursor = Cursor::new(input);
-        
+
         // Skip FLAC marker "fLaC"
         if input.len() >= 4 && &input[0..4] == b"fLaC" {
             cursor.set_position(4);
-            
+
             // Parse metadata blocks
             loop {
                 if cursor.position() >= input.len() as u64 {
                     break;
                 }
-                
+
                 let block_header = match cursor.read_u8() {
                     Ok(header) => header,
                     Err(_) => break,
                 };
-                
+
                 let is_last = (block_header & 0x80) != 0;
                 let block_type = block_header & 0x7F;
-                
+
                 let block_size = match cursor.read_u24::<byteorder::BigEndian>() {
                     Ok(size) => size as usize,
                     Err(_) => break,
                 };
-                
+
                 let block_start = cursor.position() as usize;
                 if block_start + block_size > input.len() {
                     break;
                 }
-                
+
                 let block_data = &input[block_start..block_start + block_size];
-                
+
                 match block_type {
                     // APPLICATION block - might contain iXML or other metadata
                     2 => {
                         if block_data.len() >= 4 {
                             let app_id = &block_data[0..4];
                             let app_data = &block_data[4..];
-                            
+
                             if app_id == b"iXML" {
                                 if let Ok(xml_str) = std::str::from_utf8(app_data) {
                                     metadata.parse_ixml(xml_str)?;
@@ -533,15 +533,15 @@ impl Codec for FlacCodec {
                     // PADDING, STREAMINFO, etc. - skip
                     _ => {}
                 }
-                
+
                 cursor.set_position(block_start as u64 + block_size as u64);
-                
+
                 if is_last {
                     break;
                 }
             }
         }
-        
+
         Ok(metadata)
     }
 
@@ -569,7 +569,8 @@ impl Codec for FlacCodec {
             "VERSION" => "Version",
             "LOCATION" => "Location",
             _ => key,
-        }.to_string()
+        }
+        .to_string()
     }
 
     // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs

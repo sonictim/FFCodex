@@ -204,199 +204,199 @@ impl WavpackDecoder {
         Ok(())
     }
 
-    /// Extract metadata tags from the WavPack file
-    pub fn extract_metadata(&self) -> R<Vec<MetadataChunk>> {
-        let mut chunks = Vec::new();
+    // Extract metadata tags from the WavPack file
+    // pub fn extract_metadata(&self) -> R<Vec<MetadataChunk>> {
+    //     let mut chunks = Vec::new();
 
-        dprintln!("🔍 WavPack EXTRACTION: Starting metadata extraction...");
+    //     dprintln!("🔍 WavPack EXTRACTION: Starting metadata extraction...");
 
-        // Extract text tags
-        let num_tags = unsafe { WavpackGetNumTagItems(self.context) };
-        dprintln!("🔍 WavPack EXTRACTION: Found {} text tag items", num_tags);
+    //     // Extract text tags
+    //     let num_tags = unsafe { WavpackGetNumTagItems(self.context) };
+    //     dprintln!("🔍 WavPack EXTRACTION: Found {} text tag items", num_tags);
 
-        for i in 0..num_tags {
-            let mut item_buffer = vec![0u8; 256];
-            let result = unsafe {
-                WavpackGetTagItemIndexed(
-                    self.context,
-                    i,
-                    item_buffer.as_mut_ptr() as *mut c_char,
-                    item_buffer.len() as c_int,
-                )
-            };
+    //     for i in 0..num_tags {
+    //         let mut item_buffer = vec![0u8; 256];
+    //         let result = unsafe {
+    //             WavpackGetTagItemIndexed(
+    //                 self.context,
+    //                 i,
+    //                 item_buffer.as_mut_ptr() as *mut c_char,
+    //                 item_buffer.len() as c_int,
+    //             )
+    //         };
 
-            if result > 0 {
-                // Get the item name
-                let item_end = item_buffer
-                    .iter()
-                    .position(|&b| b == 0)
-                    .unwrap_or(item_buffer.len());
-                let item_name = String::from_utf8_lossy(&item_buffer[..item_end]).to_string();
+    //         if result > 0 {
+    //             // Get the item name
+    //             let item_end = item_buffer
+    //                 .iter()
+    //                 .position(|&b| b == 0)
+    //                 .unwrap_or(item_buffer.len());
+    //             let item_name = String::from_utf8_lossy(&item_buffer[..item_end]).to_string();
 
-                // Get the item value
-                let mut value_buffer = vec![0u8; 1024];
-                let value_len = unsafe {
-                    WavpackGetTagItem(
-                        self.context,
-                        item_name.as_ptr() as *const c_char,
-                        value_buffer.as_mut_ptr() as *mut c_char,
-                        value_buffer.len() as c_int,
-                    )
-                };
+    //             // Get the item value
+    //             let mut value_buffer = vec![0u8; 1024];
+    //             let value_len = unsafe {
+    //                 WavpackGetTagItem(
+    //                     self.context,
+    //                     item_name.as_ptr() as *const c_char,
+    //                     value_buffer.as_mut_ptr() as *mut c_char,
+    //                     value_buffer.len() as c_int,
+    //                 )
+    //             };
 
-                if value_len > 0 {
-                    let value_end = value_buffer
-                        .iter()
-                        .position(|&b| b == 0)
-                        .unwrap_or(value_buffer.len());
-                    let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
-                    if !item_name.is_empty() && !value.is_empty() {
-                        dprintln!(
-                            "🔍 WavPack EXTRACTION: [CHUNK {}] Text tag: {} = {}",
-                            chunks.len(),
-                            item_name,
-                            value
-                        );
-                        chunks.push(MetadataChunk::TextTag {
-                            key: item_name,
-                            value,
-                        });
-                    }
-                }
-            }
-        }
+    //             if value_len > 0 {
+    //                 let value_end = value_buffer
+    //                     .iter()
+    //                     .position(|&b| b == 0)
+    //                     .unwrap_or(value_buffer.len());
+    //                 let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
+    //                 if !item_name.is_empty() && !value.is_empty() {
+    //                     dprintln!(
+    //                         "🔍 WavPack EXTRACTION: [CHUNK {}] Text tag: {} = {}",
+    //                         chunks.len(),
+    //                         item_name,
+    //                         value
+    //                     );
+    //                     chunks.push(MetadataChunk::TextTag {
+    //                         key: item_name,
+    //                         value,
+    //                     });
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        // Extract binary tags (like album art)
-        let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(self.context) };
-        dprintln!(
-            "🔍 WavPack EXTRACTION: Found {} binary tag items",
-            num_binary_tags
-        );
+    //     // Extract binary tags (like album art)
+    //     let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(self.context) };
+    //     dprintln!(
+    //         "🔍 WavPack EXTRACTION: Found {} binary tag items",
+    //         num_binary_tags
+    //     );
 
-        for i in 0..num_binary_tags {
-            let mut item_buffer = vec![0u8; 256];
-            let result = unsafe {
-                WavpackGetBinaryTagItemIndexed(
-                    self.context,
-                    i,
-                    item_buffer.as_mut_ptr() as *mut c_char,
-                    item_buffer.len() as c_int,
-                )
-            };
+    //     for i in 0..num_binary_tags {
+    //         let mut item_buffer = vec![0u8; 256];
+    //         let result = unsafe {
+    //             WavpackGetBinaryTagItemIndexed(
+    //                 self.context,
+    //                 i,
+    //                 item_buffer.as_mut_ptr() as *mut c_char,
+    //                 item_buffer.len() as c_int,
+    //             )
+    //         };
 
-            if result > 0 {
-                let item_end = item_buffer
-                    .iter()
-                    .position(|&b| b == 0)
-                    .unwrap_or(item_buffer.len());
-                let item_name = String::from_utf8_lossy(&item_buffer[..item_end]).to_string();
+    //         if result > 0 {
+    //             let item_end = item_buffer
+    //                 .iter()
+    //                 .position(|&b| b == 0)
+    //                 .unwrap_or(item_buffer.len());
+    //             let item_name = String::from_utf8_lossy(&item_buffer[..item_end]).to_string();
 
-                // Get binary data - start with reasonable size and grow if needed
-                let mut data_buffer = vec![0u8; 2 * 1024 * 1024]; // 2MB initial
-                let data_len = unsafe {
-                    WavpackGetBinaryTagItem(
-                        self.context,
-                        item_name.as_ptr() as *const c_char,
-                        data_buffer.as_mut_ptr() as *mut c_char,
-                        data_buffer.len() as c_int,
-                    )
-                };
+    //             // Get binary data - start with reasonable size and grow if needed
+    //             let mut data_buffer = vec![0u8; 2 * 1024 * 1024]; // 2MB initial
+    //             let data_len = unsafe {
+    //                 WavpackGetBinaryTagItem(
+    //                     self.context,
+    //                     item_name.as_ptr() as *const c_char,
+    //                     data_buffer.as_mut_ptr() as *mut c_char,
+    //                     data_buffer.len() as c_int,
+    //                 )
+    //             };
 
-                if data_len > 0 {
-                    data_buffer.truncate(data_len as usize);
+    //             if data_len > 0 {
+    //                 data_buffer.truncate(data_len as usize);
 
-                    // Check if this looks like image data
-                    if item_name.to_lowercase().contains("cover")
-                        || item_name.to_lowercase().contains("art")
-                        || item_name.to_lowercase().contains("picture")
-                        || item_name.to_lowercase().contains("apic")
-                    {
-                        let mime_type = Self::detect_image_mime_type(&data_buffer);
-                        dprintln!(
-                            "🔍 WavPack EXTRACTION: [CHUNK {}] Picture: {} ({} bytes) - {}",
-                            chunks.len(),
-                            item_name,
-                            data_buffer.len(),
-                            mime_type
-                        );
+    //                 // Check if this looks like image data
+    //                 if item_name.to_lowercase().contains("cover")
+    //                     || item_name.to_lowercase().contains("art")
+    //                     || item_name.to_lowercase().contains("picture")
+    //                     || item_name.to_lowercase().contains("apic")
+    //                 {
+    //                     let mime_type = Self::detect_image_mime_type(&data_buffer);
+    //                     dprintln!(
+    //                         "🔍 WavPack EXTRACTION: [CHUNK {}] Picture: {} ({} bytes) - {}",
+    //                         chunks.len(),
+    //                         item_name,
+    //                         data_buffer.len(),
+    //                         mime_type
+    //                     );
 
-                        chunks.push(MetadataChunk::Picture {
-                            mime_type,
-                            description: item_name.clone(),
-                            data: data_buffer.clone(),
-                        });
-                    } else {
-                        dprintln!(
-                            "🔍 WavPack EXTRACTION: [CHUNK {}] Binary: {} ({} bytes)",
-                            chunks.len(),
-                            item_name,
-                            data_buffer.len()
-                        );
-                    }
+    //                     chunks.push(MetadataChunk::Picture {
+    //                         mime_type,
+    //                         description: item_name.clone(),
+    //                         data: data_buffer.clone(),
+    //                     });
+    //                 } else {
+    //                     dprintln!(
+    //                         "🔍 WavPack EXTRACTION: [CHUNK {}] Binary: {} ({} bytes)",
+    //                         chunks.len(),
+    //                         item_name,
+    //                         data_buffer.len()
+    //                     );
+    //                 }
 
-                    chunks.push(MetadataChunk::Unknown {
-                        id: format!("WV_{}", item_name),
-                        data: data_buffer,
-                    });
-                }
-            }
-        }
+    //                 chunks.push(MetadataChunk::Unknown {
+    //                     id: format!("WV_{}", item_name),
+    //                     data: data_buffer,
+    //                 });
+    //             }
+    //         }
+    //     }
 
-        // Add wrapper information if available
-        let wrapper_bytes = unsafe { WavpackGetWrapperBytes(self.context) };
-        if wrapper_bytes > 0 {
-            let wrapper_data = unsafe { WavpackGetWrapperData(self.context) };
-            if !wrapper_data.is_null() {
-                let wrapper_slice =
-                    unsafe { std::slice::from_raw_parts(wrapper_data, wrapper_bytes as usize) };
+    //     // Add wrapper information if available
+    //     let wrapper_bytes = unsafe { WavpackGetWrapperBytes(self.context) };
+    //     if wrapper_bytes > 0 {
+    //         let wrapper_data = unsafe { WavpackGetWrapperData(self.context) };
+    //         if !wrapper_data.is_null() {
+    //             let wrapper_slice =
+    //                 unsafe { std::slice::from_raw_parts(wrapper_data, wrapper_bytes as usize) };
 
-                dprintln!(
-                    "🔍 WavPack EXTRACTION: [CHUNK {}] Wrapper data ({} bytes)",
-                    chunks.len(),
-                    wrapper_bytes
-                );
-                chunks.push(MetadataChunk::Unknown {
-                    id: "WV_WRAPPER".to_string(),
-                    data: wrapper_slice.to_vec(),
-                });
-            }
-        }
+    //             dprintln!(
+    //                 "🔍 WavPack EXTRACTION: [CHUNK {}] Wrapper data ({} bytes)",
+    //                 chunks.len(),
+    //                 wrapper_bytes
+    //             );
+    //             chunks.push(MetadataChunk::Unknown {
+    //                 id: "WV_WRAPPER".to_string(),
+    //                 data: wrapper_slice.to_vec(),
+    //             });
+    //         }
+    //     }
 
-        dprintln!(
-            "🔍 WavPack EXTRACTION: ✅ Completed! Total chunks extracted: {}",
-            chunks.len()
-        );
-        for (i, chunk) in chunks.iter().enumerate() {
-            match chunk {
-                MetadataChunk::TextTag { key, .. } => {
-                    dprintln!(
-                        "🔍 WavPack EXTRACTION: Final order [{}] TextTag: {}",
-                        i,
-                        key
-                    );
-                }
-                MetadataChunk::Picture { description, .. } => {
-                    dprintln!(
-                        "🔍 WavPack EXTRACTION: Final order [{}] Picture: {}",
-                        i,
-                        description
-                    );
-                }
-                MetadataChunk::Unknown { id, .. } => {
-                    dprintln!("🔍 WavPack EXTRACTION: Final order [{}] Unknown: {}", i, id);
-                }
-                _ => {
-                    dprintln!(
-                        "🔍 WavPack EXTRACTION: Final order [{}] Other: {}",
-                        i,
-                        chunk.id()
-                    );
-                }
-            }
-        }
+    //     dprintln!(
+    //         "🔍 WavPack EXTRACTION: ✅ Completed! Total chunks extracted: {}",
+    //         chunks.len()
+    //     );
+    //     for (i, chunk) in chunks.iter().enumerate() {
+    //         match chunk {
+    //             MetadataChunk::TextTag { key, .. } => {
+    //                 dprintln!(
+    //                     "🔍 WavPack EXTRACTION: Final order [{}] TextTag: {}",
+    //                     i,
+    //                     key
+    //                 );
+    //             }
+    //             MetadataChunk::Picture { description, .. } => {
+    //                 dprintln!(
+    //                     "🔍 WavPack EXTRACTION: Final order [{}] Picture: {}",
+    //                     i,
+    //                     description
+    //                 );
+    //             }
+    //             MetadataChunk::Unknown { id, .. } => {
+    //                 dprintln!("🔍 WavPack EXTRACTION: Final order [{}] Unknown: {}", i, id);
+    //             }
+    //             _ => {
+    //                 dprintln!(
+    //                     "🔍 WavPack EXTRACTION: Final order [{}] Other: {}",
+    //                     i,
+    //                     chunk.id()
+    //                 );
+    //             }
+    //         }
+    //     }
 
-        Ok(chunks)
-    }
+    //     Ok(chunks)
+    // }
 
     /// Detect MIME type from image data
     fn detect_image_mime_type(data: &[u8]) -> String {
@@ -975,8 +975,8 @@ impl Codec for WvCodec {
         Ok(())
     }
     fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
-        use std::fs;
         use memmap2::MmapOptions;
+        use std::fs;
 
         let file = fs::File::open(file_path)?;
         let file_size = file.metadata()?.len() as usize;
@@ -986,19 +986,21 @@ impl Codec for WvCodec {
 
         // Use WavpackDecoder to extract file information
         let decoder = WavpackDecoder::new(&mapped_file)?;
-        
+
         let sample_rate = decoder.sample_rate();
         let channels = decoder.channels();
         let total_samples = decoder.total_samples();
-        
+
         // Extract description from metadata if available
         let mut description = String::new();
         if let Ok(metadata_chunks) = decoder.extract_metadata() {
             for chunk in metadata_chunks {
                 match chunk {
                     MetadataChunk::TextTag { key, value } => {
-                        if (key.to_lowercase().contains("description") || 
-                            key.to_lowercase().contains("comment")) && !value.trim().is_empty() {
+                        if (key.to_lowercase().contains("description")
+                            || key.to_lowercase().contains("comment"))
+                            && !value.trim().is_empty()
+                        {
                             description = value.trim().to_string();
                             break;
                         }
@@ -1010,8 +1012,10 @@ impl Codec for WvCodec {
                                 if let Some(idx) = line.find('=') {
                                     let key = line[0..idx].trim().to_lowercase();
                                     let value = line[idx + 1..].trim().to_string();
-                                    
-                                    if (key.contains("description") || key.contains("comment")) && !value.is_empty() {
+
+                                    if (key.contains("description") || key.contains("comment"))
+                                        && !value.is_empty()
+                                    {
                                         description = value;
                                         break;
                                     }
@@ -1023,7 +1027,7 @@ impl Codec for WvCodec {
                 }
             }
         }
-        
+
         // WavPack doesn't store bit depth in the same way as other formats
         // It's a lossless format that can contain various bit depths
         // We'll try to determine it from the format flags or default to 16-bit
@@ -1040,14 +1044,18 @@ impl Codec for WvCodec {
         };
 
         let duration = if duration_seconds >= 3600.0 {
-            format!("{:.0}:{:02.0}:{:02.0}", 
-                duration_seconds / 3600.0, 
-                (duration_seconds % 3600.0) / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}:{:02.0}",
+                duration_seconds / 3600.0,
+                (duration_seconds % 3600.0) / 60.0,
+                duration_seconds % 60.0
+            )
         } else {
-            format!("{:.0}:{:02.0}", 
-                duration_seconds / 60.0, 
-                duration_seconds % 60.0)
+            format!(
+                "{:.0}:{:02.0}",
+                duration_seconds / 60.0,
+                duration_seconds % 60.0
+            )
         };
 
         Ok(FileInfo {
@@ -1106,20 +1114,20 @@ impl Codec for WvCodec {
         encoder.encode(buffer, total_samples, None)
     }
 
-    fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        let chunks = self.extract_metadata_chunks(&mapped_file)?;
-        Ok(Metadata::Wav(chunks)) // Use WAV metadata type for compatibility
-    }
+    // fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
+    //     let file = std::fs::File::open(file_path)?;
+    //     let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+    //     let chunks = self.extract_metadata_chunks(&mapped_file)?;
+    //     Ok(Metadata::Wav(chunks)) // Use WAV metadata type for compatibility
+    // }
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
-        
+
         // Use the WavpackDecoder to handle metadata extraction
         let decoder = WavpackDecoder::new(input)?;
         let chunks = decoder.extract_metadata()?;
-        
+
         // Parse each chunk into the metadata struct
         for chunk in chunks {
             match chunk {
@@ -1147,7 +1155,7 @@ impl Codec for WvCodec {
                 _ => {}
             }
         }
-        
+
         Ok(metadata)
     }
 

@@ -1,6 +1,6 @@
 // pub mod decode;
 pub mod codecs;
-use std::{collections::HashMap, hash::Hash, path::PathBuf};
+use std::path::PathBuf;
 
 use codecs::*;
 mod prelude;
@@ -157,12 +157,10 @@ impl Codex {
         Ok(self)
     }
 
-    pub fn embed_metadata(self, file_path: &str) -> R<Self> {
-        if self.metadata.is_none() {
-            self.extract_metadata()?;
-        }
-        let Some(metadata) = &self.metadata else {
-            return Err(anyhow::anyhow!("No metadata available to embed"));
+    pub fn embed_metadata(&self, file_path: &str) -> R<()> {
+        let metadata = match &self.metadata {
+            Some(metadata) => metadata,
+            None => return Err(anyhow::anyhow!("No metadata available to embed")),
         };
         let codec = self.codec.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
@@ -172,10 +170,8 @@ impl Codex {
         })?;
         codec.embed_metadata_to_file(file_path, metadata)?;
 
-        Ok(self)
+        Ok(())
     }
-
-
 
     pub fn set_metadata_field(&mut self, key: &str, value: &str) -> R<()> {
         match &mut self.metadata {
@@ -196,8 +192,6 @@ impl Codex {
             None => None,
         }
     }
-
-
 
     pub fn get_filename(&self) -> &str {
         self.path
@@ -234,7 +228,7 @@ impl Codex {
             Ok(codec) => {
                 // Encode the audio first
                 codec.encode_file(&self.buffer, temp_path)?;
-                
+
                 // Embed metadata if available
                 if let Some(metadata) = &self.metadata {
                     codec.embed_metadata_to_file(temp_path, metadata)?;

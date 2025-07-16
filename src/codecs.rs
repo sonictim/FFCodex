@@ -1,4 +1,3 @@
-
 use crate::prelude::*;
 mod aif;
 mod flac;
@@ -138,21 +137,21 @@ impl Metadata {
         }
     }
 
-    pub fn from(chunks: &[MetadataChunk]) -> Self {
-        let mut map = std::collections::HashMap::new();
-        let mut images = Vec::new();
-        for chunk in chunks {
-            match chunk {
-                MetadataChunk::Picture(image) => {
-                    images.push(image.clone());
-                }
-                _ => {
-                    let _ = chunk.parse(&mut map);
-                }
-            }
-        }
-        Self { map, images }
-    }
+    // pub fn from(chunks: &[MetadataChunk]) -> Self {
+    //     let mut map = std::collections::HashMap::new();
+    //     let mut images = Vec::new();
+    //     for chunk in chunks {
+    //         match chunk {
+    //             MetadataChunk::Picture(image) => {
+    //                 images.push(image.clone());
+    //             }
+    //             _ => {
+    //                 let _ = chunk.parse(&mut map);
+    //             }
+    //         }
+    //     }
+    //     Self { map, images }
+    // }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
         self.map.insert(key.to_string(), value.to_string());
@@ -244,18 +243,21 @@ impl Metadata {
         if data.len() >= 10 && &data[0..3] == b"ID3" {
             let version_major = data[3];
             let version_minor = data[4];
-            
+
             // Parse syncsafe integer (7 bits per byte, MSB is always 0)
             let size = ((data[6] as u32) << 21)
                 | ((data[7] as u32) << 14)
                 | ((data[8] as u32) << 7)
                 | (data[9] as u32);
 
-            self.set_field("ID3Version", &format!("2.{}.{}", version_major, version_minor))?;
+            self.set_field(
+                "ID3Version",
+                &format!("2.{}.{}", version_major, version_minor),
+            )?;
 
             if size > 0 && data.len() >= (10 + size as usize) {
                 let tag_data = &data[10..(10 + size as usize)];
-                
+
                 // Simple ID3 parsing - just extract common text frames
                 if version_major >= 3 {
                     self.parse_id3v2_frames(tag_data)?;
@@ -292,7 +294,7 @@ impl Metadata {
         while offset + 10 <= data.len() {
             // ID3v2.3/2.4 frame header: 4-byte ID + 4-byte size + 2-byte flags
             let frame_id = String::from_utf8_lossy(&data[offset..offset + 4]).to_string();
-            
+
             let frame_size = ((data[offset + 4] as usize) << 24)
                 | ((data[offset + 5] as usize) << 16)
                 | ((data[offset + 6] as usize) << 8)
@@ -358,8 +360,8 @@ impl Metadata {
         // TimeReference: 8 bytes, 64-bit integer (little-endian)
         if data.len() >= 346 {
             let time_ref = u64::from_le_bytes([
-                data[338], data[339], data[340], data[341], data[342], data[343],
-                data[344], data[345],
+                data[338], data[339], data[340], data[341], data[342], data[343], data[344],
+                data[345],
             ]);
             self.set_field("TimeReference", &time_ref.to_string())?;
         }
@@ -381,11 +383,7 @@ fn clean_text_field(data: &[u8]) -> Option<String> {
         .trim_end_matches('\0')
         .trim()
         .to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn get_id3_frame_name(frame_id: &str) -> Option<String> {
@@ -412,7 +410,7 @@ fn parse_id3_text_frame(data: &[u8]) -> Option<String> {
     let text_data = &data[1..];
     let text = String::from_utf8_lossy(text_data).to_string();
     let trimmed = text.trim_end_matches('\0').trim();
-    
+
     if trimmed.is_empty() {
         None
     } else {
