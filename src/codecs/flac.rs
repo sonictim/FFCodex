@@ -22,13 +22,6 @@ const I32_DIVISOR: f32 = 2147483648.0;
 
 pub struct FlacCodec;
 
-// impl FlacCodec {
-//     fn extract_metadata_chunks_from_file(&self, file_path: &str) -> R<Vec<MetadataChunk>> {
-//         let data = std::fs::read(file_path)?;
-//         self.extract_metadata_chunks(&data)
-//     }
-// }
-
 impl Codec for FlacCodec {
     fn file_extension(&self) -> &'static str {
         "flac"
@@ -449,14 +442,6 @@ impl Codec for FlacCodec {
         Ok(sink.as_slice().to_vec())
     }
 
-    fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        let tag = Tag::read_from_path(file_path)?;
-        let file_data = std::fs::read(file_path)?;
-        let chunks = self.extract_metadata_chunks(&file_data)?;
-
-        Ok(Metadata::Flac(tag, chunks))
-    }
-
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
 
@@ -545,164 +530,122 @@ impl Codec for FlacCodec {
         Ok(metadata)
     }
 
-    fn normalize_vorbis_key(&self, key: &str) -> String {
-        match key.to_uppercase().as_str() {
-            "TITLE" => "Title",
-            "ARTIST" => "Artist",
-            "ALBUM" => "Album",
-            "DATE" => "Year",
-            "GENRE" => "Genre",
-            "TRACKNUMBER" => "Track",
-            "ALBUMARTIST" => "AlbumArtist",
-            "COMPOSER" => "Composer",
-            "CONDUCTOR" => "Conductor",
-            "COMMENT" => "Comment",
-            "DESCRIPTION" => "Description",
-            "DISCNUMBER" => "DiscNumber",
-            "ORGANIZATION" => "Publisher",
-            "CONTACT" => "Contact",
-            "COPYRIGHT" => "Copyright",
-            "ISRC" => "ISRC",
-            "ENCODER" => "EncodingSettings",
-            "LANGUAGE" => "Language",
-            "PERFORMER" => "Performer",
-            "VERSION" => "Version",
-            "LOCATION" => "Location",
-            _ => key,
-        }
-        .to_string()
-    }
-
     // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
 
-    fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
-        let mut cursor = Cursor::new(input);
+    // fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
+    //     let mut cursor = Cursor::new(input);
 
-        // Skip FLAC marker
-        cursor.seek(SeekFrom::Start(4))?;
+    //     // Skip FLAC marker
+    //     cursor.seek(SeekFrom::Start(4))?;
 
-        let mut chunks = Vec::new();
-        let mut last_metadata_block = false;
-        let mut found_relevant_metadata = false;
+    //     let mut chunks = Vec::new();
+    //     let mut last_metadata_block = false;
+    //     let mut found_relevant_metadata = false;
 
-        // Parse metadata blocks - only collect the first relevant metadata block (iXML or Vorbis)
-        while !last_metadata_block && !found_relevant_metadata {
-            let header = cursor.read_u8()?;
-            last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
-            let block_type = header & 0x7F;
-            let block_size = cursor.read_u24::<BigEndian>()? as usize;
+    //     // Parse metadata blocks - only collect the first relevant metadata block (iXML or Vorbis)
+    //     while !last_metadata_block && !found_relevant_metadata {
+    //         let header = cursor.read_u8()?;
+    //         last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
+    //         let block_type = header & 0x7F;
+    //         let block_size = cursor.read_u24::<BigEndian>()? as usize;
 
-            let mut data = vec![0u8; block_size];
-            cursor.read_exact(&mut data)?;
+    //         let mut data = vec![0u8; block_size];
+    //         cursor.read_exact(&mut data)?;
 
-            match block_type {
-                VORBIS_COMMENT_BLOCK_TYPE => {
-                    // Parse Vorbis comment data according to the format specification
-                    if data.len() >= 4 {
-                        let mut data_cursor = Cursor::new(&data);
+    //         match block_type {
+    //             VORBIS_COMMENT_BLOCK_TYPE => {
+    //                 // Parse Vorbis comment data according to the format specification
+    //                 if data.len() >= 4 {
+    //                     let mut data_cursor = Cursor::new(&data);
 
-                        // Read vendor length and vendor string
-                        let vendor_length = data_cursor.read_u32::<LittleEndian>()?;
-                        let mut vendor = vec![0u8; vendor_length as usize];
-                        data_cursor.read_exact(&mut vendor)?;
+    //                     // Read vendor length and vendor string
+    //                     let vendor_length = data_cursor.read_u32::<LittleEndian>()?;
+    //                     let mut vendor = vec![0u8; vendor_length as usize];
+    //                     data_cursor.read_exact(&mut vendor)?;
 
-                        // Read user comment list
-                        let comment_list_length = data_cursor.read_u32::<LittleEndian>()?;
+    //                     // Read user comment list
+    //                     let comment_list_length = data_cursor.read_u32::<LittleEndian>()?;
 
-                        // Extract key-value pairs
-                        let mut text_tags = Vec::new();
-                        let mut comments = String::new();
-                        comments
-                            .push_str(&format!("VENDOR={}\n", String::from_utf8_lossy(&vendor)));
+    //                     // Extract key-value pairs
+    //                     let mut text_tags = Vec::new();
+    //                     let mut comments = String::new();
+    //                     comments
+    //                         .push_str(&format!("VENDOR={}\n", String::from_utf8_lossy(&vendor)));
 
-                        for _ in 0..comment_list_length {
-                            if data_cursor.position() >= data.len() as u64 {
-                                break;
-                            }
+    //                     for _ in 0..comment_list_length {
+    //                         if data_cursor.position() >= data.len() as u64 {
+    //                             break;
+    //                         }
 
-                            let comment_length = match data_cursor.read_u32::<LittleEndian>() {
-                                Ok(len) => len,
-                                Err(_) => break,
-                            };
+    //                         let comment_length = match data_cursor.read_u32::<LittleEndian>() {
+    //                             Ok(len) => len,
+    //                             Err(_) => break,
+    //                         };
 
-                            if comment_length > 0
-                                && data_cursor.position() + comment_length as u64
-                                    <= data.len() as u64
-                            {
-                                let mut comment_data = vec![0u8; comment_length as usize];
-                                if data_cursor.read_exact(&mut comment_data).is_ok() {
-                                    if let Ok(comment) = String::from_utf8(comment_data) {
-                                        comments.push_str(&format!("{}\n", comment));
+    //                         if comment_length > 0
+    //                             && data_cursor.position() + comment_length as u64
+    //                                 <= data.len() as u64
+    //                         {
+    //                             let mut comment_data = vec![0u8; comment_length as usize];
+    //                             if data_cursor.read_exact(&mut comment_data).is_ok() {
+    //                                 if let Ok(comment) = String::from_utf8(comment_data) {
+    //                                     comments.push_str(&format!("{}\n", comment));
 
-                                        // Also create TextTag entries for better cross-format compatibility
-                                        if let Some(idx) = comment.find('=') {
-                                            let key = comment[0..idx].trim().to_string();
-                                            let value = comment[idx + 1..].trim().to_string();
-                                            text_tags.push(MetadataChunk::TextTag { key, value });
-                                        }
-                                    }
-                                }
-                            }
-                        }
+    //                                     // Also create TextTag entries for better cross-format compatibility
+    //                                     if let Some(idx) = comment.find('=') {
+    //                                         let key = comment[0..idx].trim().to_string();
+    //                                         let value = comment[idx + 1..].trim().to_string();
+    //                                         text_tags.push(MetadataChunk::TextTag { key, value });
+    //                                     }
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
 
-                        // Add only the TextTag format - Vorbis comments are not iXML
-                        chunks.extend(text_tags);
-                        found_relevant_metadata = true; // Stop after finding first relevant metadata
-                    }
-                }
-                2 => {
-                    // APPLICATION block - check for iXML specifically
-                    if data.len() >= 4 {
-                        // Read the application ID (first 4 bytes)
-                        let app_id = &data[0..4];
-                        let app_data = &data[4..];
+    //                     // Add only the TextTag format - Vorbis comments are not iXML
+    //                     chunks.extend(text_tags);
+    //                     found_relevant_metadata = true; // Stop after finding first relevant metadata
+    //                 }
+    //             }
+    //             2 => {
+    //                 // APPLICATION block - check for iXML specifically
+    //                 if data.len() >= 4 {
+    //                     // Read the application ID (first 4 bytes)
+    //                     let app_id = &data[0..4];
+    //                     let app_data = &data[4..];
 
-                        match app_id {
-                            b"iXML" => {
-                                // Only process if we haven't found relevant metadata yet
-                                if !found_relevant_metadata {
-                                    // Parse iXML data - this is what we really want
-                                    if let Ok(xml_string) = String::from_utf8(app_data.to_vec()) {
-                                        chunks.push(MetadataChunk::IXml(xml_string));
-                                        found_relevant_metadata = true; // Mark that we found our metadata
-                                    }
-                                }
-                            }
-                            b"smgz" | b"SMED" | b"SMRD" | b"SMPL" => {
-                                // Capture SMED (Soundminer) blocks
-                                chunks.push(MetadataChunk::Soundminer(app_data.to_vec()));
-                            }
-                            _ => {
-                                // Skip all other application blocks - we only care about iXML
-                            }
-                        }
-                    }
-                }
-                // Skip other metadata types - we only care about Vorbis comments and iXML
-                _ => {
-                    // Skip this block
-                }
-            }
-        }
+    //                     match app_id {
+    //                         b"iXML" => {
+    //                             // Only process if we haven't found relevant metadata yet
+    //                             if !found_relevant_metadata {
+    //                                 // Parse iXML data - this is what we really want
+    //                                 if let Ok(xml_string) = String::from_utf8(app_data.to_vec()) {
+    //                                     chunks.push(MetadataChunk::IXml(xml_string));
+    //                                     found_relevant_metadata = true; // Mark that we found our metadata
+    //                                 }
+    //                             }
+    //                         }
+    //                         b"smgz" | b"SMED" | b"SMRD" | b"SMPL" => {
+    //                             // Capture SMED (Soundminer) blocks
+    //                             chunks.push(MetadataChunk::Soundminer(app_data.to_vec()));
+    //                         }
+    //                         _ => {
+    //                             // Skip all other application blocks - we only care about iXML
+    //                         }
+    //                     }
+    //                 }
+    //             }
+    //             // Skip other metadata types - we only care about Vorbis comments and iXML
+    //             _ => {
+    //                 // Skip this block
+    //             }
+    //         }
+    //     }
 
-        Ok(chunks)
-    }
+    //     Ok(chunks)
+    // }
 
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
-        let Some(metadata) = metadata else {
-            return Err(anyhow!("Cannot embed None Metadata"));
-        };
-
-        let (tag, chunks) = match metadata {
-            Metadata::Flac(tag, chunks) => (tag, chunks),
-            _ => return Err(anyhow!("Unsupported metadata format")),
-        };
-
-        dprintln!(
-            "embed_metadata_to_file: Starting with {} chunks",
-            chunks.len()
-        );
-
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
         // Use metaflac to safely write metadata blocks
         let mut dest_tag = Tag::read_from_path(file_path).unwrap_or_else(|_| Tag::new());
 
@@ -711,146 +654,37 @@ impl Codec for FlacCodec {
         dest_tag.remove_blocks(metaflac::BlockType::Picture);
         dest_tag.remove_blocks(metaflac::BlockType::Application);
 
-        // Collect the IDs of chunks we're going to replace
-        let mut replacing_app_ids = std::collections::HashSet::new();
-        for chunk in chunks {
-            match chunk {
-                MetadataChunk::IXml(_) => {
-                    replacing_app_ids.insert(b"iXML".to_vec());
-                }
-                MetadataChunk::Unknown { id, .. } if id.starts_with("FLAC_APP_") => {
-                    let app_id_str = id.trim_start_matches("FLAC_APP_");
-                    let app_id = if app_id_str.len() >= 4 {
-                        app_id_str.as_bytes()[0..4].to_vec()
-                    } else {
-                        let mut id_bytes = app_id_str.as_bytes().to_vec();
-                        id_bytes.resize(4, 0);
-                        id_bytes
-                    };
-                    replacing_app_ids.insert(app_id);
-                }
-                _ => {}
-            }
+        // Create a new VorbisComment block from the hashmap
+        let mut vorbis_comment = metaflac::block::VorbisComment::new();
+        vorbis_comment.vendor_string = "FFCodex".to_string();
+
+        // Add all fields from the hashmap to VorbisComment
+        for (key, value) in metadata.get_all_fields().iter() {
+            // Convert to standard Vorbis comment field names
+            let vorbis_key = self.map_to_vorbis_key(key);
+            vorbis_comment
+                .comments
+                .entry(vorbis_key)
+                .or_default()
+                .push(value.clone());
         }
 
-        // Add only Application blocks from the source tag that we're not replacing
-        // We skip VorbisComment and Picture blocks since we'll recreate them from chunks
-        for block in tag.blocks() {
-            match block {
-                Block::Application(app_block) => {
-                    if !replacing_app_ids.contains(&app_block.id) {
-                        dest_tag.push_block(block.clone());
-                    }
-                }
-                _ => {
-                    // Skip other blocks - we'll recreate VorbisComment and Picture from chunks
-                }
-            }
-        }
+        // Add the VorbisComment block
+        dest_tag.push_block(Block::VorbisComment(vorbis_comment));
 
-        // Consolidate all text-based metadata into a single VorbisComment block
-        let mut consolidated_vorbis_comment = metaflac::block::VorbisComment::new();
-        consolidated_vorbis_comment.vendor_string = "FFCodex".to_string();
-        let mut has_vorbis_data = false;
-
-        // Process chunks and convert them to metaflac blocks
-        for chunk in chunks {
-            match chunk {
-                MetadataChunk::IXml(xml_string) => {
-                    // Check if this is proper iXML data (contains XML structure)
-                    if xml_string.contains("<?xml")
-                        || xml_string.contains("<BWFXML>")
-                        || xml_string.contains("<BWF_IXML")
-                    {
-                        // This is iXML data - create APPLICATION block
-                        let app_block = metaflac::block::Application {
-                            id: b"iXML".to_vec(),
-                            data: xml_string.as_bytes().to_vec(),
-                        };
-                        dest_tag.push_block(Block::Application(app_block));
-                    } else {
-                        // This is Vorbis comment data (legacy format)
-                        has_vorbis_data = true;
-                        for line in xml_string.lines() {
-                            if line.starts_with("VENDOR=") {
-                                consolidated_vorbis_comment.vendor_string =
-                                    line.trim_start_matches("VENDOR=").to_string();
-                            } else if !line.is_empty() && line.contains('=') {
-                                if let Some((key, value)) = line.split_once('=') {
-                                    consolidated_vorbis_comment
-                                        .comments
-                                        .entry(key.to_string())
-                                        .or_default()
-                                        .push(value.to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-                MetadataChunk::TextTag { key, value } => {
-                    // Add to consolidated Vorbis comment
-                    has_vorbis_data = true;
-                    consolidated_vorbis_comment
-                        .comments
-                        .entry(key.clone())
-                        .or_default()
-                        .push(value.clone());
-                }
-                MetadataChunk::Picture {
-                    mime_type,
-                    description,
-                    data,
-                } => {
-                    let picture_block = metaflac::block::Picture {
-                        picture_type: metaflac::block::PictureType::Other,
-                        mime_type: mime_type.clone(),
-                        description: description.clone(),
-                        width: 0,
-                        height: 0,
-                        depth: 0,
-                        num_colors: 0,
-                        data: data.clone(),
-                    };
-                    dest_tag.push_block(Block::Picture(picture_block));
-                }
-                MetadataChunk::Unknown { id, data } => {
-                    if id.starts_with("FLAC_APP_") {
-                        // Extract application ID
-                        let app_id_str = id.trim_start_matches("FLAC_APP_");
-                        let app_id = if app_id_str.len() >= 4 {
-                            app_id_str.as_bytes()[0..4].to_vec()
-                        } else {
-                            let mut id_bytes = app_id_str.as_bytes().to_vec();
-                            id_bytes.resize(4, 0);
-                            id_bytes
-                        };
-
-                        let app_block = metaflac::block::Application {
-                            id: app_id,
-                            data: data.clone(),
-                        };
-                        dest_tag.push_block(Block::Application(app_block));
-                    }
-                    // Skip other unknown blocks for now
-                }
-                MetadataChunk::Soundminer(data) => {
-                    // Preserve Soundminer chunks as APPLICATION blocks
-                    // Use "smgz" as the application ID for Soundminer data
-                    let app_block = metaflac::block::Application {
-                        id: b"smgz".to_vec(),
-                        data: data.clone(),
-                    };
-                    dest_tag.push_block(Block::Application(app_block));
-                }
-                _ => {
-                    // Skip other chunk types for now
-                }
-            }
-        }
-
-        // Add the consolidated VorbisComment block only if we have Vorbis data
-        if has_vorbis_data {
-            dest_tag.push_block(Block::VorbisComment(consolidated_vorbis_comment));
+        // Add image chunks as Picture blocks
+        for image in metadata.get_images() {
+            let picture_block = metaflac::block::Picture {
+                picture_type: metaflac::block::PictureType::Other,
+                mime_type: image.mime_type().to_string(),
+                description: image.description().to_string(),
+                width: 0,
+                height: 0,
+                depth: 0,
+                num_colors: 0,
+                data: image.data().to_vec(),
+            };
+            dest_tag.push_block(Block::Picture(picture_block));
         }
 
         // Write the metadata back to the file
@@ -861,243 +695,243 @@ impl Codec for FlacCodec {
         Ok(())
     }
 
-    fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>> {
-        // Skip processing if there are no chunks to embed
-        if chunks.is_empty() {
-            return Ok(input.to_vec());
-        }
+    // fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>> {
+    //     // Skip processing if there are no chunks to embed
+    //     if chunks.is_empty() {
+    //         return Ok(input.to_vec());
+    //     }
 
-        let mut cursor = Cursor::new(input);
-        let mut output = Cursor::new(Vec::new());
+    //     let mut cursor = Cursor::new(input);
+    //     let mut output = Cursor::new(Vec::new());
 
-        // Copy FLAC marker - never modify this
-        let mut marker = [0u8; 4];
-        cursor.read_exact(&mut marker)?;
-        output.write_all(&marker)?;
+    //     // Copy FLAC marker - never modify this
+    //     let mut marker = [0u8; 4];
+    //     cursor.read_exact(&mut marker)?;
+    //     output.write_all(&marker)?;
 
-        // Read the STREAMINFO block header
-        let header = cursor.read_u8()?;
-        let block_type = header & 0x7F;
-        let block_size = cursor.read_u24::<BigEndian>()? as usize;
+    //     // Read the STREAMINFO block header
+    //     let header = cursor.read_u8()?;
+    //     let block_type = header & 0x7F;
+    //     let block_size = cursor.read_u24::<BigEndian>()? as usize;
 
-        if block_type != STREAMINFO_BLOCK_TYPE {
-            return Err(anyhow!("First metadata block is not STREAMINFO"));
-        }
+    //     if block_type != STREAMINFO_BLOCK_TYPE {
+    //         return Err(anyhow!("First metadata block is not STREAMINFO"));
+    //     }
 
-        // Copy STREAMINFO data - don't modify this either
-        let mut streaminfo_data = vec![0u8; block_size];
-        cursor.read_exact(&mut streaminfo_data)?;
+    //     // Copy STREAMINFO data - don't modify this either
+    //     let mut streaminfo_data = vec![0u8; block_size];
+    //     cursor.read_exact(&mut streaminfo_data)?;
 
-        // Write the STREAMINFO header exactly as it was, but clear the LAST flag
-        // since we're adding metadata
-        output.write_u8(STREAMINFO_BLOCK_TYPE)?; // Always clear the last block flag
-        output.write_u24::<BigEndian>(block_size as u32)?;
-        output.write_all(&streaminfo_data)?;
+    //     // Write the STREAMINFO header exactly as it was, but clear the LAST flag
+    //     // since we're adding metadata
+    //     output.write_u8(STREAMINFO_BLOCK_TYPE)?; // Always clear the last block flag
+    //     output.write_u24::<BigEndian>(block_size as u32)?;
+    //     output.write_all(&streaminfo_data)?;
 
-        // Collect and organize new metadata chunks
-        let mut vorbis_chunks = Vec::new();
-        let mut picture_chunks = Vec::new();
-        let mut other_chunks = Vec::new();
-        let mut text_tags = Vec::new();
+    //     // Collect and organize new metadata chunks
+    //     let mut vorbis_chunks = Vec::new();
+    //     let mut picture_chunks = Vec::new();
+    //     let mut other_chunks = Vec::new();
+    //     let mut text_tags = Vec::new();
 
-        for chunk in chunks {
-            match chunk {
-                MetadataChunk::IXml(_) => vorbis_chunks.push(chunk.clone()),
-                MetadataChunk::Picture { .. } => picture_chunks.push(chunk.clone()),
-                MetadataChunk::TextTag { .. } => text_tags.push(chunk.clone()),
-                _ => other_chunks.push(chunk.clone()),
-            }
-        }
+    //     for chunk in chunks {
+    //         match chunk {
+    //             MetadataChunk::IXml(_) => vorbis_chunks.push(chunk.clone()),
+    //             MetadataChunk::Picture { .. } => picture_chunks.push(chunk.clone()),
+    //             MetadataChunk::TextTag { .. } => text_tags.push(chunk.clone()),
+    //             _ => other_chunks.push(chunk.clone()),
+    //         }
+    //     }
 
-        // Group TextTag entries into a Vorbis comment if not already present
-        if !text_tags.is_empty() && vorbis_chunks.is_empty() {
-            let mut xml = String::from_utf8_lossy(b"VENDOR=FFCodex\n").to_string();
-            for tag in &text_tags {
-                if let MetadataChunk::TextTag { key, value } = tag {
-                    xml.push_str(&format!("{}={}\n", key, value));
-                }
-            }
-            vorbis_chunks.push(MetadataChunk::IXml(xml));
-        }
+    //     // Group TextTag entries into a Vorbis comment if not already present
+    //     if !text_tags.is_empty() && vorbis_chunks.is_empty() {
+    //         let mut xml = String::from_utf8_lossy(b"VENDOR=FFCodex\n").to_string();
+    //         for tag in &text_tags {
+    //             if let MetadataChunk::TextTag { key, value } = tag {
+    //                 xml.push_str(&format!("{}={}\n", key, value));
+    //             }
+    //         }
+    //         vorbis_chunks.push(MetadataChunk::IXml(xml));
+    //     }
 
-        // Collect all metadata blocks
-        let all_chunks: Vec<&MetadataChunk> = vorbis_chunks
-            .iter()
-            .chain(picture_chunks.iter())
-            .chain(other_chunks.iter())
-            .collect();
+    //     // Collect all metadata blocks
+    //     let all_chunks: Vec<&MetadataChunk> = vorbis_chunks
+    //         .iter()
+    //         .chain(picture_chunks.iter())
+    //         .chain(other_chunks.iter())
+    //         .collect();
 
-        // Now write the new metadata blocks
-        for (i, chunk) in all_chunks.iter().enumerate() {
-            let is_last = i == all_chunks.len() - 1;
+    //     // Now write the new metadata blocks
+    //     for (i, chunk) in all_chunks.iter().enumerate() {
+    //         let is_last = i == all_chunks.len() - 1;
 
-            let (block_type, data) = match chunk {
-                MetadataChunk::IXml(xml_string) => {
-                    // Convert IXml string to Vorbis comment format
-                    let mut vorbis_data = Cursor::new(Vec::new());
-                    let mut vendor = b"FFCodex".to_vec();
-                    let mut comments = Vec::new();
+    //         let (block_type, data) = match chunk {
+    //             MetadataChunk::IXml(xml_string) => {
+    //                 // Convert IXml string to Vorbis comment format
+    //                 let mut vorbis_data = Cursor::new(Vec::new());
+    //                 let mut vendor = b"FFCodex".to_vec();
+    //                 let mut comments = Vec::new();
 
-                    for line in xml_string.lines() {
-                        if line.starts_with("VENDOR=") {
-                            vendor = line.trim_start_matches("VENDOR=").as_bytes().to_vec();
-                        } else if !line.is_empty() {
-                            comments.push(line.as_bytes().to_vec());
-                        }
-                    }
+    //                 for line in xml_string.lines() {
+    //                     if line.starts_with("VENDOR=") {
+    //                         vendor = line.trim_start_matches("VENDOR=").as_bytes().to_vec();
+    //                     } else if !line.is_empty() {
+    //                         comments.push(line.as_bytes().to_vec());
+    //                     }
+    //                 }
 
-                    vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
-                    vorbis_data.write_all(&vendor)?;
-                    vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
+    //                 vorbis_data.write_u32::<LittleEndian>(vendor.len() as u32)?;
+    //                 vorbis_data.write_all(&vendor)?;
+    //                 vorbis_data.write_u32::<LittleEndian>(comments.len() as u32)?;
 
-                    for comment in comments {
-                        vorbis_data.write_u32::<LittleEndian>(comment.len() as u32)?;
-                        vorbis_data.write_all(&comment)?;
-                    }
+    //                 for comment in comments {
+    //                     vorbis_data.write_u32::<LittleEndian>(comment.len() as u32)?;
+    //                     vorbis_data.write_all(&comment)?;
+    //                 }
 
-                    (VORBIS_COMMENT_BLOCK_TYPE, vorbis_data.into_inner())
-                }
-                MetadataChunk::Picture {
-                    mime_type,
-                    description,
-                    data,
-                } => {
-                    let mut pic_data = Cursor::new(Vec::new());
-                    pic_data.write_u32::<BigEndian>(0)?; // Picture type
-                    pic_data.write_u32::<BigEndian>(mime_type.len() as u32)?;
-                    pic_data.write_all(mime_type.as_bytes())?;
-                    pic_data.write_u32::<BigEndian>(description.len() as u32)?;
-                    pic_data.write_all(description.as_bytes())?;
+    //                 (VORBIS_COMMENT_BLOCK_TYPE, vorbis_data.into_inner())
+    //             }
+    //             MetadataChunk::Picture {
+    //                 mime_type,
+    //                 description,
+    //                 data,
+    //             } => {
+    //                 let mut pic_data = Cursor::new(Vec::new());
+    //                 pic_data.write_u32::<BigEndian>(0)?; // Picture type
+    //                 pic_data.write_u32::<BigEndian>(mime_type.len() as u32)?;
+    //                 pic_data.write_all(mime_type.as_bytes())?;
+    //                 pic_data.write_u32::<BigEndian>(description.len() as u32)?;
+    //                 pic_data.write_all(description.as_bytes())?;
 
-                    // Width, height, color depth, colors used
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
-                    pic_data.write_u32::<BigEndian>(0)?;
+    //                 // Width, height, color depth, colors used
+    //                 pic_data.write_u32::<BigEndian>(0)?;
+    //                 pic_data.write_u32::<BigEndian>(0)?;
+    //                 pic_data.write_u32::<BigEndian>(0)?;
+    //                 pic_data.write_u32::<BigEndian>(0)?;
 
-                    pic_data.write_u32::<BigEndian>(data.len() as u32)?;
-                    pic_data.write_all(data)?;
+    //                 pic_data.write_u32::<BigEndian>(data.len() as u32)?;
+    //                 pic_data.write_all(data)?;
 
-                    (PICTURE_BLOCK_TYPE, pic_data.into_inner())
-                }
-                MetadataChunk::Unknown { id, data } if id == "FLAC_PICTURE" => {
-                    (PICTURE_BLOCK_TYPE, data.clone())
-                }
-                MetadataChunk::TextTag { .. } => {
-                    continue; // Skip individual text tags
-                }
-                MetadataChunk::Soundminer(data) => {
-                    // Preserve Soundminer chunks as APPLICATION blocks
-                    // Use "smgz" as the application ID for Soundminer data
-                    let mut app_data = Vec::with_capacity(4 + data.len());
-                    app_data.extend_from_slice(b"smgz");
-                    app_data.extend_from_slice(data);
-                    (2, app_data) // Application block type
-                }
-                MetadataChunk::Unknown { id, data } => {
-                    let block_type = if id.starts_with("FLAC_") {
-                        id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
-                    } else {
-                        0x7F
-                    };
-                    (block_type, data.clone())
-                }
-                _ => (0x7F, chunk.data().to_vec()),
-            };
+    //                 (PICTURE_BLOCK_TYPE, pic_data.into_inner())
+    //             }
+    //             MetadataChunk::Unknown { id, data } if id == "FLAC_PICTURE" => {
+    //                 (PICTURE_BLOCK_TYPE, data.clone())
+    //             }
+    //             MetadataChunk::TextTag { .. } => {
+    //                 continue; // Skip individual text tags
+    //             }
+    //             MetadataChunk::Soundminer(data) => {
+    //                 // Preserve Soundminer chunks as APPLICATION blocks
+    //                 // Use "smgz" as the application ID for Soundminer data
+    //                 let mut app_data = Vec::with_capacity(4 + data.len());
+    //                 app_data.extend_from_slice(b"smgz");
+    //                 app_data.extend_from_slice(data);
+    //                 (2, app_data) // Application block type
+    //             }
+    //             MetadataChunk::Unknown { id, data } => {
+    //                 let block_type = if id.starts_with("FLAC_") {
+    //                     id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
+    //                 } else {
+    //                     0x7F
+    //                 };
+    //                 (block_type, data.clone())
+    //             }
+    //             _ => (0x7F, chunk.data().to_vec()),
+    //         };
 
-            // Write the header for our new metadata block
-            output.write_u8(if is_last {
-                block_type | LAST_METADATA_BLOCK_FLAG
-            } else {
-                block_type
-            })?;
+    //         // Write the header for our new metadata block
+    //         output.write_u8(if is_last {
+    //             block_type | LAST_METADATA_BLOCK_FLAG
+    //         } else {
+    //             block_type
+    //         })?;
 
-            // Write the block size and data
-            output.write_u24::<BigEndian>(data.len() as u32)?;
-            output.write_all(&data)?;
-        }
+    //         // Write the block size and data
+    //         output.write_u24::<BigEndian>(data.len() as u32)?;
+    //         output.write_all(&data)?;
+    //     }
 
-        // Now we need to read (and skip) all original metadata blocks after STREAMINFO
-        // The first block we already read (STREAMINFO)
-        let mut last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
+    //     // Now we need to read (and skip) all original metadata blocks after STREAMINFO
+    //     // The first block we already read (STREAMINFO)
+    //     let mut last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
 
-        // If the original STREAMINFO was the last metadata block, we're done with metadata
-        // Otherwise, copy all remaining original metadata blocks
-        if !last_metadata_block {
-            let mut original_metadata_blocks = Vec::new();
+    //     // If the original STREAMINFO was the last metadata block, we're done with metadata
+    //     // Otherwise, copy all remaining original metadata blocks
+    //     if !last_metadata_block {
+    //         let mut original_metadata_blocks = Vec::new();
 
-            // First, read all metadata blocks to memory
-            while !last_metadata_block {
-                // Read block header
-                let header = cursor.read_u8()?;
-                last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
-                let block_type = header & 0x7F;
-                let block_size = cursor.read_u24::<BigEndian>()? as usize;
+    //         // First, read all metadata blocks to memory
+    //         while !last_metadata_block {
+    //             // Read block header
+    //             let header = cursor.read_u8()?;
+    //             last_metadata_block = (header & LAST_METADATA_BLOCK_FLAG) != 0;
+    //             let block_type = header & 0x7F;
+    //             let block_size = cursor.read_u24::<BigEndian>()? as usize;
 
-                // Read block data
-                let mut block_data = vec![0u8; block_size];
-                cursor.read_exact(&mut block_data)?;
+    //             // Read block data
+    //             let mut block_data = vec![0u8; block_size];
+    //             cursor.read_exact(&mut block_data)?;
 
-                // Store this metadata block (header and all) for later
-                original_metadata_blocks.push((block_type, block_data));
-            }
+    //             // Store this metadata block (header and all) for later
+    //             original_metadata_blocks.push((block_type, block_data));
+    //         }
 
-            // Now write all original metadata blocks (if any)
-            // but set the LAST flag only on the very last one
-            if !original_metadata_blocks.is_empty() {
-                // If we added our own blocks, clear the LAST flag on our last one
-                if !all_chunks.is_empty() {
-                    // Go back and clear the LAST flag on our last written metadata block
-                    let current_position = output.position();
-                    let last_header_pos =
-                        current_position - all_chunks.last().unwrap().data().len() as u64 - 4;
-                    output.seek(SeekFrom::Start(last_header_pos))?;
+    //         // Now write all original metadata blocks (if any)
+    //         // but set the LAST flag only on the very last one
+    //         if !original_metadata_blocks.is_empty() {
+    //             // If we added our own blocks, clear the LAST flag on our last one
+    //             if !all_chunks.is_empty() {
+    //                 // Go back and clear the LAST flag on our last written metadata block
+    //                 let current_position = output.position();
+    //                 let last_header_pos =
+    //                     current_position - all_chunks.last().unwrap().data().len() as u64 - 4;
+    //                 output.seek(SeekFrom::Start(last_header_pos))?;
 
-                    let last_block_type = match all_chunks.last().unwrap() {
-                        MetadataChunk::IXml(_) => VORBIS_COMMENT_BLOCK_TYPE,
-                        MetadataChunk::Picture { .. } => PICTURE_BLOCK_TYPE,
-                        MetadataChunk::Unknown { id, .. } if id == "FLAC_PICTURE" => {
-                            PICTURE_BLOCK_TYPE
-                        }
-                        MetadataChunk::Unknown { id, .. } if id.starts_with("FLAC_") => {
-                            id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
-                        }
-                        _ => 0x7F,
-                    };
+    //                 let last_block_type = match all_chunks.last().unwrap() {
+    //                     MetadataChunk::IXml(_) => VORBIS_COMMENT_BLOCK_TYPE,
+    //                     MetadataChunk::Picture { .. } => PICTURE_BLOCK_TYPE,
+    //                     MetadataChunk::Unknown { id, .. } if id == "FLAC_PICTURE" => {
+    //                         PICTURE_BLOCK_TYPE
+    //                     }
+    //                     MetadataChunk::Unknown { id, .. } if id.starts_with("FLAC_") => {
+    //                         id.trim_start_matches("FLAC_").parse::<u8>().unwrap_or(0x7F) & 0x7F
+    //                     }
+    //                     _ => 0x7F,
+    //                 };
 
-                    // Write without LAST flag
-                    output.write_u8(last_block_type)?;
+    //                 // Write without LAST flag
+    //                 output.write_u8(last_block_type)?;
 
-                    // Restore the position
-                    output.seek(SeekFrom::Start(current_position))?;
-                }
+    //                 // Restore the position
+    //                 output.seek(SeekFrom::Start(current_position))?;
+    //             }
 
-                // Write all but the last original metadata block
-                for (i, (block_type, block_data)) in original_metadata_blocks.iter().enumerate() {
-                    let is_last = i == original_metadata_blocks.len() - 1;
+    //             // Write all but the last original metadata block
+    //             for (i, (block_type, block_data)) in original_metadata_blocks.iter().enumerate() {
+    //                 let is_last = i == original_metadata_blocks.len() - 1;
 
-                    // Write the header
-                    output.write_u8(if is_last {
-                        block_type | LAST_METADATA_BLOCK_FLAG
-                    } else {
-                        *block_type
-                    })?;
+    //                 // Write the header
+    //                 output.write_u8(if is_last {
+    //                     block_type | LAST_METADATA_BLOCK_FLAG
+    //                 } else {
+    //                     *block_type
+    //                 })?;
 
-                    // Write the block size and data
-                    output.write_u24::<BigEndian>(block_data.len() as u32)?;
-                    output.write_all(block_data)?;
-                }
-            }
-        }
+    //                 // Write the block size and data
+    //                 output.write_u24::<BigEndian>(block_data.len() as u32)?;
+    //                 output.write_all(block_data)?;
+    //             }
+    //         }
+    //     }
 
-        // Finally, copy all audio frames (everything after metadata)
-        let _position = cursor.position();
-        let mut audio_data = Vec::new();
-        cursor.read_to_end(&mut audio_data)?;
-        output.write_all(&audio_data)?;
+    //     // Finally, copy all audio frames (everything after metadata)
+    //     let _position = cursor.position();
+    //     let mut audio_data = Vec::new();
+    //     cursor.read_to_end(&mut audio_data)?;
+    //     output.write_all(&audio_data)?;
 
-        Ok(output.into_inner())
-    }
+    //     Ok(output.into_inner())
+    // }
 
     // fn embed_file_metadata_chunks(&self, file_path: &str, chunks: &[MetadataChunk]) -> R<()> {
     //     if !file_path.to_lowercase().ends_with(".flac") {
@@ -1159,6 +993,64 @@ impl Codec for FlacCodec {
     //     tag.write_to_path(file_path)
     //         .map_err(|e| anyhow!("Failed to write FLAC metadata: {}", e))
     // }
+}
+
+impl FlacCodec {
+    fn normalize_vorbis_key(&self, key: &str) -> String {
+        match key.to_uppercase().as_str() {
+            "TITLE" => "Title",
+            "ARTIST" => "Artist",
+            "ALBUM" => "Album",
+            "DATE" => "Year",
+            "GENRE" => "Genre",
+            "TRACKNUMBER" => "Track",
+            "ALBUMARTIST" => "AlbumArtist",
+            "COMPOSER" => "Composer",
+            "CONDUCTOR" => "Conductor",
+            "COMMENT" => "Comment",
+            "DESCRIPTION" => "Description",
+            "DISCNUMBER" => "DiscNumber",
+            "ORGANIZATION" => "Publisher",
+            "CONTACT" => "Contact",
+            "COPYRIGHT" => "Copyright",
+            "ISRC" => "ISRC",
+            "ENCODER" => "EncodingSettings",
+            "LANGUAGE" => "Language",
+            "PERFORMER" => "Performer",
+            "VERSION" => "Version",
+            "LOCATION" => "Location",
+            _ => key,
+        }
+        .to_string()
+    }
+    fn map_to_vorbis_key(&self, key: &str) -> String {
+        // Map common metadata keys to standard Vorbis comment field names
+        match key {
+            "Title" => "TITLE".to_string(),
+            "Artist" => "ARTIST".to_string(),
+            "Album" => "ALBUM".to_string(),
+            "Year" => "DATE".to_string(),
+            "Genre" => "GENRE".to_string(),
+            "Track" => "TRACKNUMBER".to_string(),
+            "AlbumArtist" => "ALBUMARTIST".to_string(),
+            "Composer" => "COMPOSER".to_string(),
+            "Conductor" => "CONDUCTOR".to_string(),
+            "Comment" => "COMMENT".to_string(),
+            "Description" => "DESCRIPTION".to_string(),
+            "DiscNumber" => "DISCNUMBER".to_string(),
+            "Publisher" => "ORGANIZATION".to_string(),
+            "Contact" => "CONTACT".to_string(),
+            "Copyright" => "COPYRIGHT".to_string(),
+            "ISRC" => "ISRC".to_string(),
+            "EncodingSettings" => "ENCODER".to_string(),
+            "Language" => "LANGUAGE".to_string(),
+            "Performer" => "PERFORMER".to_string(),
+            "Version" => "VERSION".to_string(),
+            "Location" => "LOCATION".to_string(),
+            // For any other keys, convert to uppercase (Vorbis convention)
+            _ => key.to_uppercase(),
+        }
+    }
 }
 
 // Helper function to get bits per sample from SampleFormat

@@ -43,8 +43,12 @@ impl MetadataChunk {
         match self {
             Self::Vorbis(data) => {
                 // Parse Vorbis comments
-                for (key, value) in data. {
-                    map.insert(key.clone(), value.clone());
+                for tag in data {
+                    for (key, values) in &tag.comments {
+                        if !values.is_empty() {
+                            map.insert(key.clone(), values[0].clone());
+                        }
+                    }
                 }
                 Ok(())
             }

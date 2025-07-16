@@ -1,5 +1,6 @@
 // pub mod decode;
 pub mod codecs;
+// pub mod metadata;
 use std::path::PathBuf;
 
 use codecs::*;

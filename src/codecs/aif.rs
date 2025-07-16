@@ -1,9 +1,5 @@
 use crate::prelude::*;
 
-// Format tags
-// const FORMAT_PCM: u16 = 1;
-// const FORMAT_IEEE_FLOAT: u16 = 3;
-
 // Chunk Identifiers
 const FORM_CHUNK_ID: &[u8; 4] = b"FORM";
 const AIFF_FORMAT_ID: &[u8; 4] = b"AIFF";
@@ -362,25 +358,18 @@ impl Codec for AifCodec {
         })
     }
 
-    fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        let chunks = self.extract_metadata_chunks(&mapped_file)?;
-        Ok(Metadata::Wav(chunks)) // Use WAV metadata type since AIFF uses similar chunk structure
-    }
-
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         let mut cursor = Cursor::new(input);
-        
+
         // Validate AIFF header
         let mut header = [0u8; 12];
         cursor.read_exact(&mut header)?;
-        
+
         if &header[0..4] != b"FORM" || &header[8..12] != b"AIFF" {
             return Err(anyhow!("Invalid AIFF header"));
         }
-        
+
         // Parse chunks
         while cursor.position() < input.len() as u64 {
             // Read chunk header
@@ -388,27 +377,26 @@ impl Codec for AifCodec {
                 Ok(id) => id,
                 Err(_) => break,
             };
-            
+
             let chunk_size = match cursor.read_u32::<BigEndian>() {
                 Ok(size) => size as usize,
                 Err(_) => break,
             };
-            
+
             let chunk_start = cursor.position() as usize;
-            
+
             // Ensure we don't read past the end of the input
             if chunk_start + chunk_size > input.len() {
                 break;
             }
-            
+
             let chunk_data = &input[chunk_start..chunk_start + chunk_size];
-            
+
             // Parse different chunk types
             match &chunk_id.to_be_bytes() {
                 b"NAME" => {
                     // Name chunk - contains title
-                    let name = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                    let name = String::from_utf8_lossy(chunk_data)
                         .trim_end_matches('\0')
                         .trim();
                     if !name.is_empty() {
@@ -417,8 +405,7 @@ impl Codec for AifCodec {
                 }
                 b"AUTH" => {
                     // Author chunk - contains artist
-                    let author = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                    let author = String::from_utf8_lossy(chunk_data)
                         .trim_end_matches('\0')
                         .trim();
                     if !author.is_empty() {
@@ -427,8 +414,7 @@ impl Codec for AifCodec {
                 }
                 b"(c) " => {
                     // Copyright chunk
-                    let copyright = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                    let copyright = String::from_utf8_lossy(chunk_data)
                         .trim_end_matches('\0')
                         .trim();
                     if !copyright.is_empty() {
@@ -437,8 +423,7 @@ impl Codec for AifCodec {
                 }
                 b"ANNO" => {
                     // Annotation chunk - contains comments
-                    let annotation = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                    let annotation = String::from_utf8_lossy(chunk_data)
                         .trim_end_matches('\0')
                         .trim();
                     if !annotation.is_empty() {
@@ -447,9 +432,8 @@ impl Codec for AifCodec {
                 }
                 b"iXML" => {
                     // iXML chunk
-                    let xml_str = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref());
-                    metadata.parse_ixml(xml_str)?;
+                    let xml_str = String::from_utf8_lossy(chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
                 }
                 b"ID3 " | b"id3 " => {
                     // ID3 chunk
@@ -458,9 +442,11 @@ impl Codec for AifCodec {
                 _ => {
                     // Check if it's a text chunk (4 printable ASCII characters)
                     let chunk_id_str = String::from_utf8_lossy(&chunk_id.to_be_bytes());
-                    if chunk_id_str.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
-                        let text_value = std::str::from_utf8(chunk_data)
-                            .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                    if chunk_id_str
+                        .chars()
+                        .all(|c| c.is_ascii_graphic() || c == ' ')
+                    {
+                        let text_value = String::from_utf8_lossy(chunk_data)
                             .trim_end_matches('\0')
                             .trim();
                         if !text_value.is_empty() {
@@ -469,340 +455,209 @@ impl Codec for AifCodec {
                     }
                 }
             }
-            
+
             // Move to next chunk (pad to even byte boundary)
             cursor.set_position(chunk_start as u64 + chunk_size as u64);
             if chunk_size % 2 == 1 {
                 cursor.set_position(cursor.position() + 1);
             }
         }
-        
+
         Ok(metadata)
     }
 
-    // Helper methods for parsing specific chunk types
-    // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
-
-    fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
-        let mut cursor = Cursor::new(input);
-
-        // Validate AIFF header
-        let mut header = [0u8; 12];
-        cursor.read_exact(&mut header)?;
-
-        if &header[0..4] != FORM_CHUNK_ID || &header[8..12] != AIFF_FORMAT_ID {
-            return Err(anyhow!("Not an AIFF file"));
-        }
-
-        let mut chunks = Vec::new();
-        while cursor.position() < input.len() as u64 {
-            let mut id = [0u8; 4];
-            if cursor.read(&mut id)? < 4 {
-                break;
-            }
-
-            let size = cursor.read_u32::<BigEndian>()?;
-
-            // Skip audio format and data chunks - they're not metadata
-            if &id == FMT_CHUNK_ID || &id == DATA_CHUNK_ID {
-                cursor.seek(SeekFrom::Current(size as i64 + (size % 2) as i64))?;
-                continue;
-            }
-
-            let mut data = vec![0u8; size as usize];
-            cursor.read_exact(&mut data)?;
-
-            let chunk = match &id {
-                ANNO_CHUNK_ID => {
-                    // AIFF annotation chunk - convert to text tag
-                    let text = String::from_utf8_lossy(&data)
-                        .trim_end_matches('\0')
-                        .to_string();
-                    chunks.push(MetadataChunk::TextTag {
-                        key: "ANNOTATION".to_string(),
-                        value: text.clone(),
-                    });
-                    MetadataChunk::Unknown {
-                        id: "ANNO".to_string(),
-                        data,
-                    }
-                }
-                COMT_CHUNK_ID => {
-                    // AIFF comment chunk - convert to iXML style format
-                    if data.len() >= 2 {
-                        let num_comments = u16::from_be_bytes([data[0], data[1]]) as usize;
-                        let mut comments = String::new();
-                        let mut offset = 2;
-
-                        for i in 0..num_comments {
-                            if offset + 8 <= data.len() {
-                                // Each comment has: timestamp (4 bytes) + marker_id (2 bytes) + count (2 bytes) + text
-                                let _timestamp = u32::from_be_bytes([
-                                    data[offset],
-                                    data[offset + 1],
-                                    data[offset + 2],
-                                    data[offset + 3],
-                                ]);
-                                let _marker_id =
-                                    u16::from_be_bytes([data[offset + 4], data[offset + 5]]);
-                                let text_len =
-                                    u16::from_be_bytes([data[offset + 6], data[offset + 7]])
-                                        as usize;
-                                offset += 8;
-
-                                if offset + text_len <= data.len() {
-                                    let comment_text =
-                                        String::from_utf8_lossy(&data[offset..offset + text_len])
-                                            .to_string();
-                                    comments.push_str(&format!(
-                                        "COMMENT{}={}\n",
-                                        i + 1,
-                                        comment_text
-                                    ));
-
-                                    chunks.push(MetadataChunk::TextTag {
-                                        key: format!("COMMENT{}", i + 1),
-                                        value: comment_text,
-                                    });
-
-                                    offset += text_len;
-                                    // Handle padding
-                                    if text_len % 2 == 1 {
-                                        offset += 1;
-                                    }
-                                }
-                            }
-                        }
-
-                        if !comments.is_empty() {
-                            chunks.push(MetadataChunk::IXml(comments));
-                        }
-                    }
-
-                    MetadataChunk::Unknown {
-                        id: "COMT".to_string(),
-                        data,
-                    }
-                }
-                NAME_CHUNK_ID => {
-                    let text = String::from_utf8_lossy(&data)
-                        .trim_end_matches('\0')
-                        .to_string();
-                    chunks.push(MetadataChunk::TextTag {
-                        key: "TITLE".to_string(),
-                        value: text.clone(),
-                    });
-                    MetadataChunk::Unknown {
-                        id: "NAME".to_string(),
-                        data,
-                    }
-                }
-                AUTH_CHUNK_ID => {
-                    let text = String::from_utf8_lossy(&data)
-                        .trim_end_matches('\0')
-                        .to_string();
-                    chunks.push(MetadataChunk::TextTag {
-                        key: "ARTIST".to_string(),
-                        value: text.clone(),
-                    });
-                    MetadataChunk::Unknown {
-                        id: "AUTH".to_string(),
-                        data,
-                    }
-                }
-                COPYRIGHT_CHUNK_ID => {
-                    let text = String::from_utf8_lossy(&data)
-                        .trim_end_matches('\0')
-                        .to_string();
-                    chunks.push(MetadataChunk::TextTag {
-                        key: "COPYRIGHT".to_string(),
-                        value: text.clone(),
-                    });
-                    MetadataChunk::Unknown {
-                        id: "(c) ".to_string(),
-                        data,
-                    }
-                }
-                APPL_CHUNK_ID => {
-                    // Application specific data - keep as unknown for now
-                    MetadataChunk::Unknown {
-                        id: "APPL".to_string(),
-                        data,
-                    }
-                }
-                ID3_CHUNK_ID => MetadataChunk::ID3(data),
-                _ => MetadataChunk::Unknown {
-                    id: String::from_utf8_lossy(&id).to_string(),
-                    data,
-                },
-            };
-
-            chunks.push(chunk);
-
-            // AIFF chunks are padded to even byte boundaries
-            if size % 2 == 1 {
-                cursor.seek(SeekFrom::Current(1))?;
-            }
-        }
-
-        Ok(chunks)
-    }
-
-    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Option<Metadata>) -> R<()> {
-        let Some(metadata) = metadata else {
-            return Err(anyhow!("No metadata to embed"));
-        };
-        let chunks = match metadata {
-            Metadata::Wav(chunks) => chunks, // AIFF uses same chunk structure as WAV
-            _ => return Err(anyhow!("Unsupported metadata format for AIFF")),
-        };
-
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+        // Read the existing file
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        let new_data = self.embed_metadata_chunks(&mapped_file, chunks)?;
+
+        // Create new data with metadata embedded
+        let new_data = self.embed_metadata_from_hashmap(&mapped_file, metadata)?;
+
+        // Write the data back to the file
         std::fs::write(file_path, new_data)?;
         Ok(())
     }
+}
 
-    fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>> {
+impl AifCodec {
+    fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
         let mut cursor = Cursor::new(input);
         let mut output = Cursor::new(Vec::new());
 
         // Copy the FORM/AIFF header
-        let mut form_header = [0u8; 12];
-        cursor.read_exact(&mut form_header)?;
-        output.write_all(&form_header)?;
+        let mut header = [0u8; 12];
+        cursor.read_exact(&mut header)?;
+        output.write_all(&header)?;
 
-        // Group metadata by type for better organization
-        let mut text_tags = Vec::new();
-        let mut ixml_chunks = Vec::new();
-        let mut id3_chunks = Vec::new();
-        let mut other_chunks = Vec::new();
+        // Copy fmt and data chunks, skipping old metadata chunks
+        let mut fmt_chunk_found = false;
+        let mut data_chunk_found = false;
 
-        // Process and organize metadata chunks
-        for chunk in chunks {
-            match chunk {
-                MetadataChunk::IXml(xml) => ixml_chunks.push(xml.clone()),
-                MetadataChunk::TextTag { key, value } => {
-                    text_tags.push((key.clone(), value.clone()))
-                }
-                MetadataChunk::ID3(data) => id3_chunks.push(data.clone()),
-                MetadataChunk::Unknown { id, data } => {
-                    other_chunks.push((id.clone(), data.clone()))
-                }
-                _ => {
-                    // Convert other types to unknown chunks for AIFF
-                    other_chunks.push((chunk.id(), chunk.data().to_vec()));
-                }
-            }
-        }
-
-        // Read through input file and copy non-metadata chunks
-        let mut comm_chunk_found = false;
         while cursor.position() < input.len() as u64 {
-            let mut id = [0u8; 4];
-            if cursor.read(&mut id)? < 4 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
                 break;
             }
 
-            let size = cursor.read_u32::<BigEndian>()?;
-            let mut data = vec![0u8; size as usize];
-            cursor.read_exact(&mut data)?;
+            let chunk_size = cursor.read_u32::<BigEndian>()?;
 
-            let id_str = String::from_utf8_lossy(&id).to_string();
+            match &chunk_id {
+                FMT_CHUNK_ID => {
+                    fmt_chunk_found = true;
+                    // Copy COMM chunk as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<BigEndian>(chunk_size)?;
 
-            // Handle COMM chunk specially to preserve it
-            if &id == FMT_CHUNK_ID {
-                comm_chunk_found = true;
-                aiff_write_chunk(&mut output, &id, &data)?;
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
 
-                if size % 2 == 1 {
-                    cursor.seek(SeekFrom::Current(1))?;
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
                 }
-                continue;
-            }
+                DATA_CHUNK_ID => {
+                    data_chunk_found = true;
+                    // Copy SSND chunk as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<BigEndian>(chunk_size)?;
 
-            // Skip known metadata chunks since we'll replace them
-            if matches!(
-                id_str.as_str(),
-                "ANNO" | "COMT" | "NAME" | "AUTH" | "(c) " | "APPL" | "ID3 "
-            ) {
-                if size % 2 == 1 {
-                    cursor.seek(SeekFrom::Current(1))?;
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
+
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
                 }
-                continue;
-            }
+                // Skip existing metadata chunks - we'll recreate them
+                ANNO_CHUNK_ID | COMT_CHUNK_ID | NAME_CHUNK_ID | AUTH_CHUNK_ID
+                | COPYRIGHT_CHUNK_ID | APPL_CHUNK_ID | ID3_CHUNK_ID => {
+                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                    }
+                }
+                _ => {
+                    // Copy unknown chunks as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<BigEndian>(chunk_size)?;
 
-            // Write other chunks directly to output (like SSND data chunk)
-            aiff_write_chunk(&mut output, &id, &data)?;
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
 
-            if size % 2 == 1 {
-                cursor.seek(SeekFrom::Current(1))?;
-            }
-        }
-
-        if !comm_chunk_found {
-            return Err(anyhow!("AIFF file missing COMM chunk"));
-        }
-
-        // Write metadata chunks
-
-        // Convert text tags to AIFF chunks
-        for (key, value) in &text_tags {
-            let chunk_id = match key.as_str() {
-                "TITLE" => NAME_CHUNK_ID,
-                "ARTIST" => AUTH_CHUNK_ID,
-                "COPYRIGHT" => COPYRIGHT_CHUNK_ID,
-                "ANNOTATION" => ANNO_CHUNK_ID,
-                _ => ANNO_CHUNK_ID, // Default to annotation
-            };
-            aiff_write_chunk(&mut output, chunk_id, value.as_bytes())?;
-        }
-
-        // Convert iXML to AIFF comment chunks
-        for xml in &ixml_chunks {
-            // Parse iXML and create COMT chunk
-            let mut comment_data = Vec::new();
-            comment_data.write_u16::<BigEndian>(1)?; // Number of comments
-
-            // Single comment entry: timestamp + marker_id + count + text
-            comment_data.write_u32::<BigEndian>(0)?; // Timestamp
-            comment_data.write_u16::<BigEndian>(0)?; // Marker ID
-            comment_data.write_u16::<BigEndian>(xml.len() as u16)?; // Text length
-            comment_data.extend_from_slice(xml.as_bytes());
-
-            // Add padding if needed
-            if xml.len() % 2 == 1 {
-                comment_data.push(0);
-            }
-
-            aiff_write_chunk(&mut output, COMT_CHUNK_ID, &comment_data)?;
-        }
-
-        // Write ID3 chunks
-        for id3_data in &id3_chunks {
-            aiff_write_chunk(&mut output, ID3_CHUNK_ID, id3_data)?;
-        }
-
-        // Write other unknown chunks
-        for (id, data) in &other_chunks {
-            if id.len() == 4 {
-                let id_bytes = id.as_bytes();
-                if id_bytes.len() == 4 {
-                    let chunk_id: [u8; 4] = [id_bytes[0], id_bytes[1], id_bytes[2], id_bytes[3]];
-                    aiff_write_chunk(&mut output, &chunk_id, data)?;
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
                 }
             }
         }
 
-        // Update FORM chunk size
+        if !fmt_chunk_found || !data_chunk_found {
+            return Err(anyhow!("Invalid AIFF file: missing COMM or SSND chunk"));
+        }
+
+        // Write metadata from hashmap
+        for (key, value) in metadata.get_all_fields().iter() {
+            match key.as_str() {
+                "Title" => {
+                    self.write_aif_chunk(&mut output, NAME_CHUNK_ID, value.as_bytes())?;
+                }
+                "Artist" => {
+                    self.write_aif_chunk(&mut output, AUTH_CHUNK_ID, value.as_bytes())?;
+                }
+                "Copyright" => {
+                    self.write_aif_chunk(&mut output, COPYRIGHT_CHUNK_ID, value.as_bytes())?;
+                }
+                "Comment" => {
+                    self.write_aif_chunk(&mut output, ANNO_CHUNK_ID, value.as_bytes())?;
+                }
+                _ => {
+                    // Store other fields as application-specific chunks
+                    let chunk_name = format!("APP{}", key.len().min(4));
+                    let chunk_id = chunk_name.as_bytes();
+                    if chunk_id.len() == 4 {
+                        let mut full_chunk_id = [0u8; 4];
+                        full_chunk_id.copy_from_slice(chunk_id);
+                        self.write_aif_chunk(&mut output, &full_chunk_id, value.as_bytes())?;
+                    }
+                }
+            }
+        }
+
+        // Write image chunks
+        for image in metadata.get_images() {
+            // Store images as application chunks
+            self.write_aif_chunk(&mut output, APPL_CHUNK_ID, image.data())?;
+        }
+
+        // Update file size in header
         let final_size = output.position() as u32 - 8;
-        let output_data = output.into_inner();
-        let mut result_data = output_data.clone();
+        let mut result_data = output.into_inner();
         (&mut result_data[4..8]).write_u32::<BigEndian>(final_size)?;
 
         Ok(result_data)
     }
+
+    fn write_aif_chunk(
+        &self,
+        output: &mut Cursor<Vec<u8>>,
+        chunk_id: &[u8; 4],
+        data: &[u8],
+    ) -> R<()> {
+        output.write_all(chunk_id)?;
+        output.write_u32::<BigEndian>(data.len() as u32)?;
+        output.write_all(data)?;
+        if data.len() % 2 == 1 {
+            output.write_all(&[0])?; // padding
+        }
+        Ok(())
+    }
+}
+
+// Helper function to read IEEE 754 extended precision numbers (80-bit)
+fn read_ieee_extended(cursor: &mut Cursor<&[u8]>) -> R<f64> {
+    let mut extended = [0u8; 10];
+    cursor.read_exact(&mut extended)?;
+
+    // Extract the sign, exponent, and mantissa
+    let sign = (extended[0] & 0x80) != 0;
+    let exponent = ((extended[0] as u16 & 0x7F) << 8) | (extended[1] as u16);
+
+    let mut mantissa = 0u64;
+    for i in 2..10 {
+        mantissa = (mantissa << 8) | (extended[i] as u64);
+    }
+
+    // Convert to f64
+    if exponent == 0 {
+        return Ok(0.0);
+    }
+
+    let bias = 16383i32;
+    let adjusted_exponent = exponent as i32 - bias;
+
+    // Handle special cases
+    if adjusted_exponent > 1023 {
+        return Ok(if sign {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        });
+    }
+
+    let mantissa_f64 = mantissa as f64 / (1u64 << 63) as f64;
+    let result = mantissa_f64 * 2.0_f64.powi(adjusted_exponent);
+
+    Ok(if sign { -result } else { result })
 }
 
 fn aiff_write_chunk<W: Write>(writer: &mut W, id: &[u8], data: &[u8]) -> R<()> {

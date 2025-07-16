@@ -169,6 +169,10 @@ impl Metadata {
     pub fn get_images(&self) -> &[ImageChunk] {
         &self.images
     }
+
+    pub fn get_all_fields(&self) -> &std::collections::HashMap<String, String> {
+        &self.map
+    }
 }
 
 // Common metadata parsing utilities
@@ -423,4 +427,26 @@ pub struct ImageChunk {
     mime_type: String,
     description: String,
     data: Vec<u8>,
+}
+
+impl ImageChunk {
+    pub fn new(mime_type: String, description: String, data: Vec<u8>) -> Self {
+        Self {
+            mime_type,
+            description,
+            data,
+        }
+    }
+
+    pub fn mime_type(&self) -> &str {
+        &self.mime_type
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    pub fn data(&self) -> &[u8] {
+        &self.data
+    }
 }

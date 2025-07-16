@@ -15,6 +15,25 @@ const DATA_CHUNK_ID: &[u8; 4] = b"data";
 const STANDARD_FMT_CHUNK_SIZE: u32 = 16;
 const HEADER_SIZE: usize = 12; // RIFF + size + WAVE
 
+// Bit depth constants
+const BIT_DEPTH_8: u16 = 8;
+const BIT_DEPTH_16: u16 = 16;
+const BIT_DEPTH_24: u16 = 24;
+const BIT_DEPTH_32: u16 = 32;
+
+// Sample conversion constants
+const U8_SCALE: f32 = 127.0;
+const U8_OFFSET: f32 = 128.0;
+const I16_MAX_F: f32 = 32767.0;
+const I16_DIVISOR: f32 = 32768.0;
+const I24_MAX_F: f32 = 8388607.0;
+const I24_DIVISOR: f32 = 8388608.0;
+const I32_MAX_F: f32 = 2147483647.0;
+const I32_DIVISOR: f32 = 2147483648.0;
+const I24_SIGN_BIT: i32 = 0x800000;
+const I24_SIGN_EXTENSION_MASK: i32 = 0xFF000000;
+const BYTE_MASK: i32 = 0xFF;
+
 pub struct WavCodec;
 
 impl Codec for WavCodec {
@@ -429,88 +448,6 @@ impl Codec for WavCodec {
         Ok(out)
     }
 
-    // fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-    //     if !file_path.ends_with(".wav") {
-    //         return Err(anyhow!(
-    //             "WAV codec can only extract metadata from .wav files"
-    //         ));
-    //     }
-
-    //     let file = std::fs::File::open(file_path)?;
-    //     let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-
-    //     // Let's check the channel count in the WAV header before extraction
-
-    //     let mut cursor = Cursor::new(&mapped_file);
-
-    //     // Read RIFF header first to validate
-    //     let mut header = [0u8; 12];
-    //     if cursor.read_exact(&mut header).is_ok() {
-    //         if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-    //             // Not a valid WAVE file
-    //         } else {
-
-    //             // Look for the fmt chunk
-    //             while cursor.position() < mapped_file.len() as u64 {
-    //                 let mut chunk_id = [0u8; 4];
-    //                 if cursor.read(&mut chunk_id)? < 4 {
-    //                     break;
-    //                 }
-
-    //                 let chunk_size = cursor.read_u32::<LittleEndian>()?;
-
-    //                 if &chunk_id == FMT_CHUNK_ID {
-    //                     // Found fmt chunk
-    //                     if chunk_size >= 16 {
-    //                         // Ensure fmt chunk is at least standard size
-    //                         // Format type
-    //                         let _format_tag = cursor.read_u16::<LittleEndian>()?;
-    //                         // Channel count is right after format tag
-    //                         let channel_count = cursor.read_u16::<LittleEndian>()?;
-
-    //                         // Validate the channel count
-    //                         if !(1..=128).contains(&channel_count) {
-    //                             // Suspicious channel count
-    //                         }
-
-    //                         // Get sample rate while we're at it
-    //                         let _sample_rate = cursor.read_u32::<LittleEndian>()?;
-
-    //                         // Don't need to read further in fmt chunk
-    //                         break;
-    //                     }
-    //                 } else {
-    //                     // Skip this chunk
-    //                     cursor.seek(SeekFrom::Current(
-    //                         chunk_size as i64 + (chunk_size % 2) as i64,
-    //                     ))?;
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     let chunks = self.extract_metadata_chunks(&mapped_file)?;
-    //     dprintln!(
-    //         "extract_file_metadata_chunks - Found {} metadata chunks",
-    //         chunks.len()
-    //     );
-    //     let mut metadata = Metadata::default();
-    //     for chunk in chunks {
-    //         if let MetadataChunk::Picture(image) = chunk {
-    //             metadata.images.push(image);
-
-    //             continue;
-    //             // Handle picture chunk
-    //         }
-    //         let m = chunk.parse()?;
-    //         m.into_iter().for_each(|(key, value)| {
-    //             metadata.map.insert(key, value);
-    //         });
-    //     }
-
-    //     Ok(metadata)
-    // }
-
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         let mut cursor = Cursor::new(input);
@@ -549,9 +486,8 @@ impl Codec for WavCodec {
                     metadata.parse_bext(chunk_data)?;
                 }
                 b"iXML" => {
-                    let xml_str = std::str::from_utf8(chunk_data)
-                        .unwrap_or_else(|_| String::from_utf8_lossy(chunk_data).as_ref());
-                    metadata.parse_ixml(xml_str)?;
+                    let xml_str = String::from_utf8_lossy(chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
                 }
                 b"ID3 " | b"id3 " => {
                     metadata.parse_id3(chunk_data)?;
@@ -562,15 +498,14 @@ impl Codec for WavCodec {
                 }
                 _ => {
                     // Check if it's a text chunk (4 printable ASCII characters)
-                    let chunk_id_str = String::from_utf8_lossy(&chunk_id.to_le_bytes());
+                    let chunk_id_bytes = chunk_id.to_le_bytes();
+                    let chunk_id_str = String::from_utf8_lossy(&chunk_id_bytes);
                     if chunk_id_str
                         .chars()
                         .all(|c| c.is_ascii_graphic() || c == ' ')
                     {
-                        let text_value = std::str::from_utf8(chunk_data)
-                            .unwrap_or_else(|_| String::from_utf8_lossy(chunk_data).as_ref())
-                            .trim_end_matches('\0')
-                            .trim();
+                        let text_cow = String::from_utf8_lossy(chunk_data);
+                        let text_value = text_cow.trim_end_matches('\0').trim();
                         if !text_value.is_empty() {
                             metadata.set_field(&chunk_id_str.trim(), text_value)?;
                         }
@@ -588,341 +523,229 @@ impl Codec for WavCodec {
         Ok(metadata)
     }
 
-    // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
-
-    // fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
-    //     let mut cursor = Cursor::new(input);
-
-    //     let mut header = [0u8; 12];
-    //     cursor.read_exact(&mut header)?;
-
-    //     if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-    //         return Err(anyhow!("Not a WAV file"));
-    //     }
-
-    //     let mut chunks = Vec::new();
-    //     while cursor.position() < input.len() as u64 {
-    //         let mut id = [0u8; 4];
-    //         if cursor.read(&mut id)? < 4 {
-    //             break;
-    //         }
-
-    //         let size = cursor.read_u32::<LittleEndian>()?;
-
-    //         // Skip the 'data' chunk and 'fmt ' chunk - they're not metadata
-    //         if &id == DATA_CHUNK_ID || &id == FMT_CHUNK_ID {
-    //             cursor.seek(SeekFrom::Current(size as i64 + (size % 2) as i64))?;
-    //             continue;
-    //         }
-
-    //         let mut data = vec![0u8; size as usize];
-    //         cursor.read_exact(&mut data)?;
-
-    //         let chunk = match &id {
-    //             b"bext" => MetadataChunk::Bext(data),
-    //             b"iXML" => {
-    //                 let xml = String::from_utf8_lossy(&data).to_string();
-
-    //                 // Also extract individual text tags for better format conversion
-    //                 for line in xml.lines() {
-    //                     if let Some(idx) = line.find('=') {
-    //                         let key = line[0..idx].trim().to_string();
-    //                         let value = line[idx + 1..].trim().to_string();
-
-    //                         // Only add if it's a valid key-value pair
-    //                         if !key.is_empty() {
-    //                             chunks.push(MetadataChunk::TextTag { key, value });
-    //                         }
-    //                     }
-    //                 }
-
-    //                 MetadataChunk::IXml(xml)
-    //             }
-    //             // Recognize ID3 chunk if present in WAV
-    //             b"id3 " | b"ID3 " => MetadataChunk::ID3(data),
-    //             // Picture/album art in WAV
-    //             b"APIC" => {
-    //                 // Try to extract picture metadata
-    //                 if data.len() > 8 {
-    //                     // Simple picture extraction
-    //                     // In a real implementation, you'd parse the APIC structure properly
-    //                     let image_chunk = ImageChunk {
-    //                         mime_type: "image/jpeg".to_string(), // Default assumption
-    //                         description: "Album Art".to_string(),
-    //                         data: data.clone(),
-    //                     };
-    //                     chunks.push(MetadataChunk::Picture(image_chunk));
-    //                 }
-
-    //                 // Also keep the raw data
-    //                 MetadataChunk::Unknown {
-    //                     id: "APIC".to_string(),
-    //                     data,
-    //                 }
-    //             }
-    //             b"SMED" | b"SMRD" | b"SMPL" => MetadataChunk::Soundminer(data),
-    //             _ => MetadataChunk::Unknown {
-    //                 id: String::from_utf8_lossy(&id).to_string(),
-    //                 data,
-    //             },
-    //         };
-
-    //         chunks.push(chunk);
-
-    //         // Padding: chunks are aligned to even sizes
-    //         if size % 2 == 1 {
-    //             cursor.seek(SeekFrom::Current(1))?;
-    //         }
-    //     }
-
-    //     Ok(chunks)
-    // }
-
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
-        // let Some(metadata) = metadata else {
-        //     return Err(anyhow!("No metadata provided for embedding"));
-        // };
-        // let chunks = match metadata {
-        //     Metadata::Wav(chunks) => chunks,
-        //     _ => return Err(anyhow!("Unsupported metadata format")),
-        // };
+        // Read the existing file
+        let file = std::fs::File::open(file_path)?;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
 
-        // let file = std::fs::File::open(file_path)?;
-        // let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-
-        // // Use mapped_file as &[u8] without loading into memory
-        // let new_data = self.embed_metadata_chunks(&mapped_file, chunks)?;
-
-        // // Format-specific validation - only run for WAV files
-        // if file_path.ends_with(".wav") {
-        //     let mut cursor = Cursor::new(&new_data);
-        //     cursor.seek(SeekFrom::Start(22))?; // Position of channel count in WAV header
-        //     let channel_count = cursor.read_u16::<LittleEndian>()?;
-        //     dprintln!(
-        //         "embed_file_metadata_chunks - Channel count in output file: {}",
-        //         channel_count
-        //     );
-        // }
+        // Create new metadata from the hashmap
+        let new_data = self.embed_metadata_from_hashmap(&mapped_file, metadata)?;
 
         // Write the data back to the file
-        // std::fs::write(file_path, new_data)?;
+        std::fs::write(file_path, new_data)?;
+        Ok(())
+    }
+}
+
+impl WavCodec {
+    fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
+        let mut cursor = Cursor::new(input);
+        let mut output = Cursor::new(Vec::new());
+
+        // Copy the RIFF/WAVE header
+        let mut riff_header = [0u8; 12];
+        cursor.read_exact(&mut riff_header)?;
+        output.write_all(&riff_header)?;
+
+        // Copy fmt and data chunks, skipping old metadata chunks
+        let mut fmt_chunk_found = false;
+        let mut data_chunk_found = false;
+
+        while cursor.position() < input.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<LittleEndian>()?;
+
+            match &chunk_id {
+                FMT_CHUNK_ID => {
+                    fmt_chunk_found = true;
+                    // Copy fmt chunk as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<LittleEndian>(chunk_size)?;
+
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
+
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
+                }
+                DATA_CHUNK_ID => {
+                    data_chunk_found = true;
+                    // Copy data chunk as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<LittleEndian>(chunk_size)?;
+
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
+
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
+                }
+                // Skip existing metadata chunks - we'll recreate them
+                b"bext" | b"iXML" | b"ID3 " | b"id3 " | b"SMED" | b"SMRD" | b"SMPL" | b"APIC" => {
+                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                    }
+                }
+                _ => {
+                    // Copy unknown chunks as-is
+                    output.write_all(&chunk_id)?;
+                    output.write_u32::<LittleEndian>(chunk_size)?;
+
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    output.write_all(&chunk_data)?;
+
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        output.write_all(&[0])?;
+                    }
+                }
+            }
+        }
+
+        if !fmt_chunk_found || !data_chunk_found {
+            return Err(anyhow!("Invalid WAV file: missing fmt or data chunk"));
+        }
+
+        // Create and write bext chunk from hashmap
+        self.write_bext_chunk(&mut output, metadata)?;
+
+        // Create and write iXML chunk from hashmap
+        self.write_ixml_chunk(&mut output, metadata)?;
+
+        // Write image chunks
+        for image in metadata.get_images() {
+            self.write_image_chunk(&mut output, image)?;
+        }
+
+        // Update RIFF chunk size
+        let final_size = output.position() as u32 - 8;
+        let mut result_data = output.into_inner();
+        (&mut result_data[4..8]).write_u32::<LittleEndian>(final_size)?;
+
+        Ok(result_data)
+    }
+
+    fn write_bext_chunk(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
+        let mut bext_data = vec![0u8; 602]; // BWF spec minimum size
+
+        // Description (256 bytes) - look for Description field
+        if let Some(description) = metadata.get_field("Description") {
+            let bytes = description.as_bytes();
+            let len = std::cmp::min(bytes.len(), 255);
+            bext_data[..len].copy_from_slice(&bytes[..len]);
+        }
+
+        // Originator (32 bytes) - look for Originator field
+        if let Some(originator) = metadata.get_field("Originator") {
+            let bytes = originator.as_bytes();
+            let len = std::cmp::min(bytes.len(), 31);
+            bext_data[256..256 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginatorReference (32 bytes) - look for OriginatorReference field
+        if let Some(orig_ref) = metadata.get_field("OriginatorReference") {
+            let bytes = orig_ref.as_bytes();
+            let len = std::cmp::min(bytes.len(), 31);
+            bext_data[288..288 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginationDate (10 bytes) - look for OriginationDate field
+        if let Some(date) = metadata.get_field("OriginationDate") {
+            let bytes = date.as_bytes();
+            let len = std::cmp::min(bytes.len(), 10);
+            bext_data[320..320 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginationTime (8 bytes) - look for OriginationTime field
+        if let Some(time) = metadata.get_field("OriginationTime") {
+            let bytes = time.as_bytes();
+            let len = std::cmp::min(bytes.len(), 8);
+            bext_data[330..330 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // TimeReference (8 bytes) - look for TimeReference field
+        if let Some(time_ref) = metadata.get_field("TimeReference") {
+            if let Ok(time_ref_u64) = time_ref.parse::<u64>() {
+                let bytes = time_ref_u64.to_le_bytes();
+                bext_data[338..346].copy_from_slice(&bytes);
+            }
+        }
+
+        // Write the bext chunk
+        write_chunk(output, b"bext", &bext_data)?;
         Ok(())
     }
 
-    // fn embed_metadata_chunks(&self, input: &[u8], chunks: &[MetadataChunk]) -> R<Vec<u8>> {
-    //     let mut cursor = Cursor::new(input);
-    //     let mut output = Cursor::new(Vec::new());
+    fn write_ixml_chunk(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
+        let mut ixml_content = String::new();
 
-    //     // Copy the RIFF/WAVE header
-    //     let mut riff_header = [0u8; 12];
-    //     cursor.read_exact(&mut riff_header)?;
-    //     output.write_all(&riff_header)?;
+        // Add XML header
+        ixml_content.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        ixml_content.push_str("<BWFXML>\n");
 
-    //     // Read the original channel count from the input file
-    //     let mut original_cursor = Cursor::new(input);
-    //     original_cursor.seek(SeekFrom::Start(22))?; // Position of channel count in WAV header
-    //     let original_channels = original_cursor.read_u16::<LittleEndian>()?;
+        // Add all fields from the hashmap to iXML
+        for (key, value) in metadata.get_all_fields().iter() {
+            // Skip special fields that go in bext
+            if matches!(
+                key.as_str(),
+                "Description"
+                    | "Originator"
+                    | "OriginatorReference"
+                    | "OriginationDate"
+                    | "OriginationTime"
+                    | "TimeReference"
+            ) {
+                continue;
+            }
 
-    //     // Group metadata by type for better organization
-    //     let mut bext_chunks = Vec::new();
-    //     let mut ixml_chunks = Vec::new();
-    //     let mut picture_chunks = Vec::new();
-    //     let mut id3_chunks = Vec::new();
-    //     let mut text_tags = Vec::new();
-    //     let mut other_chunks = Vec::new();
+            ixml_content.push_str(&format!("  <{}>{}</{}>\n", key, value, key));
+        }
 
-    //     // When reading and writing non-metadata chunks, preserve the original fmt chunk
-    //     let mut fmt_chunk_found = false;
+        ixml_content.push_str("</BWFXML>\n");
 
-    //     // First collect all chunks from source audio
-    //     while cursor.position() < input.len() as u64 {
-    //         let mut id = [0u8; 4];
-    //         if cursor.read(&mut id)? < 4 {
-    //             break;
-    //         }
+        // Write the iXML chunk
+        write_chunk(output, b"iXML", ixml_content.as_bytes())?;
+        Ok(())
+    }
 
-    //         let size = cursor.read_u32::<LittleEndian>()?;
-    //         let mut data = vec![0u8; size as usize];
-    //         cursor.read_exact(&mut data)?;
+    fn write_image_chunk(&self, output: &mut Cursor<Vec<u8>>, image: &ImageChunk) -> R<()> {
+        // For WAV files, we'll use a custom chunk format for images
+        // This is similar to APIC in ID3v2
 
-    //         let id_str = String::from_utf8_lossy(&id).to_string();
+        let mut image_data = Vec::new();
 
-    //         // Handle fmt chunk specially to preserve channel count
-    //         if &id == FMT_CHUNK_ID {
-    //             fmt_chunk_found = true;
+        // Write mime type length and data
+        let mime_bytes = image.mime_type().as_bytes();
+        image_data.extend_from_slice(&(mime_bytes.len() as u32).to_le_bytes());
+        image_data.extend_from_slice(mime_bytes);
 
-    //             // We need to preserve the fmt chunk but ensure it has the correct channel count
-    //             if original_channels == 1 {
-    //                 // For mono files, make sure fmt chunk shows 1 channel
-    //                 // Channel count is at offset 2 in fmt chunk
-    //                 data[2] = 1;
-    //                 data[3] = 0; // Little-endian representation of 1
+        // Write description length and data
+        let desc_bytes = image.description().as_bytes();
+        image_data.extend_from_slice(&(desc_bytes.len() as u32).to_le_bytes());
+        image_data.extend_from_slice(desc_bytes);
 
-    //                 // Update block align and byte rate to match mono format
-    //                 let bits_per_sample = u16::from_le_bytes([data[14], data[15]]);
-    //                 let bytes_per_sample = bits_per_sample / 8;
+        // Write image data
+        image_data.extend_from_slice(image.data());
 
-    //                 // Block align (offset 12-13) = channels * bytes_per_sample
-    //                 let block_align = bytes_per_sample;
-    //                 data[12] = (block_align & 0xFF) as u8;
-    //                 data[13] = ((block_align >> 8) & 0xFF) as u8;
-
-    //                 // Byte rate (offset 8-11) = sample_rate * block_align
-    //                 let sample_rate = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    //                 let byte_rate = sample_rate * block_align as u32;
-    //                 data[8] = (byte_rate & 0xFF) as u8;
-    //                 data[9] = ((byte_rate >> 8) & 0xFF) as u8;
-    //                 data[10] = ((byte_rate >> 16) & 0xFF) as u8;
-    //                 data[11] = ((byte_rate >> 24) & 0xFF) as u8;
-    //             }
-
-    //             // Write the fmt chunk with potentially updated data
-    //             output.write_all(&id)?;
-    //             output.write_u32::<LittleEndian>(size)?;
-    //             output.write_all(&data)?;
-
-    //             if size % 2 == 1 {
-    //                 output.write_all(&[0])?; // padding
-    //             }
-    //             continue;
-    //         }
-
-    //         // Skip known metadata chunks since we'll replace them
-    //         if matches!(
-    //             id_str.as_str(),
-    //             "bext" | "iXML" | "SMED" | "SMRD" | "SMPL" | "id3 " | "ID3 " | "APIC"
-    //         ) {
-    //             if size % 2 == 1 {
-    //                 cursor.seek(SeekFrom::Current(1))?;
-    //             }
-    //             continue;
-    //         }
-
-    //         // Write other chunks directly to output
-    //         output.write_all(&id)?;
-    //         output.write_u32::<LittleEndian>(size)?;
-    //         output.write_all(&data)?;
-
-    //         if size % 2 == 1 {
-    //             output.write_all(&[0])?;
-    //         }
-    //     }
-
-    //     // If the fmt chunk wasn't found in the input file (unlikely), don't proceed
-    //     if !fmt_chunk_found {
-    //         return Err(anyhow!("WAV file missing fmt chunk"));
-    //     }
-
-    //     // Organize metadata chunks by type
-    //     for chunk in chunks {
-    //         match chunk {
-    //             MetadataChunk::Bext(data) => {
-    //                 // Update channel count in Broadcast WAV extension if necessary
-    //                 let mut bext_data = data.clone();
-    //                 if original_channels == 1 && bext_data.len() >= 356 {
-    //                     // Update channel count in BEXT chunk (at offset 354-355)
-    //                     bext_data[354] = 1;
-    //                     bext_data[355] = 0; // Little-endian representation of 1
-    //                 }
-    //                 bext_chunks.push(MetadataChunk::Bext(bext_data));
-    //             }
-    //             MetadataChunk::IXml(xml) => {
-    //                 // Check for any channel references in iXML that need updating
-    //                 let mut updated_xml = xml.clone();
-    //                 if original_channels == 1 {
-    //                     // Replace any references to "2 channels" or similar with "1 channel"
-    //                     // This is a simplistic approach and might need refinement
-    //                     updated_xml = updated_xml.replace("CHANNELS=2", "CHANNELS=1");
-    //                     updated_xml = updated_xml.replace("channels=2", "channels=1");
-    //                     updated_xml = updated_xml.replace("NumChannels=2", "NumChannels=1");
-    //                 }
-    //                 ixml_chunks.push(MetadataChunk::IXml(updated_xml));
-    //             }
-    //             MetadataChunk::Picture(image_chunk) => {
-    //                 picture_chunks.push(MetadataChunk::Picture(image_chunk.clone()))
-    //             }
-    //             MetadataChunk::ID3(data) => id3_chunks.push(MetadataChunk::ID3(data.clone())),
-    //             MetadataChunk::TextTag { key, value } => text_tags.push(MetadataChunk::TextTag {
-    //                 key: key.clone(),
-    //                 value: value.clone(),
-    //             }),
-    //             MetadataChunk::APE(data) => {
-    //                 // APE tags can be handled similarly to ID3
-    //                 other_chunks.push(MetadataChunk::APE(data.clone()));
-    //             }
-    //             MetadataChunk::Soundminer(data) => {
-    //                 other_chunks.push(MetadataChunk::Soundminer(data.clone()))
-    //             }
-    //             MetadataChunk::Unknown { id, data } => other_chunks.push(MetadataChunk::Unknown {
-    //                 id: id.clone(),
-    //                 data: data.clone(),
-    //             }),
-    //         }
-    //     }
-
-    //     // Consolidate text tags into iXML if no iXML chunk exists
-    //     if ixml_chunks.is_empty() && !text_tags.is_empty() {
-    //         let mut xml = String::new();
-    //         for tag in &text_tags {
-    //             if let MetadataChunk::TextTag { key, value } = tag {
-    //                 xml.push_str(&format!("{}={}\n", key, value));
-    //             }
-    //         }
-    //         if !xml.is_empty() {
-    //             // Create an owned MetadataChunk that's stored directly in the vector
-    //             ixml_chunks.push(MetadataChunk::IXml(xml));
-    //         }
-    //     }
-
-    //     // Write metadata chunks in order
-    //     // Write bext chunks
-    //     for chunk in &bext_chunks {
-    //         if let MetadataChunk::Bext(data) = chunk {
-    //             write_chunk(&mut output, b"bext", data)?;
-    //         }
-    //     }
-
-    //     // Write iXML chunks
-    //     for chunk in &ixml_chunks {
-    //         if let MetadataChunk::IXml(xml) = chunk {
-    //             write_chunk(&mut output, b"iXML", xml.as_bytes())?;
-    //         }
-    //     }
-
-    //     // Write picture chunks
-    //     for chunk in &picture_chunks {
-    //         if let MetadataChunk::Picture { data, .. } = chunk {
-    //             // In WAV, we need to use a custom chunk for pictures
-    //             write_chunk(&mut output, b"APIC", data)?;
-    //         }
-    //     }
-
-    //     // Write ID3 chunks
-    //     for chunk in &id3_chunks {
-    //         if let MetadataChunk::ID3(data) = chunk {
-    //             write_chunk(&mut output, b"id3 ", data)?;
-    //         }
-    //     }
-
-    //     // Write Soundminer and other chunks
-    //     for chunk in &other_chunks {
-    //         match chunk {
-    //             MetadataChunk::Soundminer(data) => write_chunk(&mut output, b"SMED", data)?,
-    //             MetadataChunk::Unknown { id, data } => {
-    //                 write_chunk(&mut output, id.as_bytes(), data)?;
-    //             }
-    //             _ => {} // Skip other types we don't handle
-    //         }
-    //     }
-
-    //     // Update RIFF chunk size
-    //     let final_size = output.position() as u32 - 8;
-    //     let output_data = output.into_inner();
-    //     let mut result_data = output_data.clone();
-    //     (&mut result_data[4..8]).write_u32::<LittleEndian>(final_size)?;
-
-    //     Ok(result_data)
-    // }
+        // Write the APIC chunk
+        write_chunk(output, b"APIC", &image_data)?;
+        Ok(())
+    }
 }
 
 fn decode_samples(
