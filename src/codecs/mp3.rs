@@ -252,7 +252,7 @@ impl Codec for Mp3Codec {
         Ok(output)
     }
 
-    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+    fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         
         // Use centralized ID3 parsing

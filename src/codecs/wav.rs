@@ -510,7 +510,7 @@ impl Codec for WavCodec {
         Ok(metadata)
     }
 
-    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+    fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         let mut cursor = Cursor::new(input);
         

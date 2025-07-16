@@ -1113,7 +1113,7 @@ impl Codec for WvCodec {
         Ok(Metadata::Wav(chunks)) // Use WAV metadata type for compatibility
     }
 
-    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+    fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         
         // Use the WavpackDecoder to handle metadata extraction

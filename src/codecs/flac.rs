@@ -457,7 +457,7 @@ impl Codec for FlacCodec {
         Ok(Metadata::Flac(tag, chunks))
     }
 
-    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+    fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         
         // First, try to parse FLAC metadata blocks using metaflac
