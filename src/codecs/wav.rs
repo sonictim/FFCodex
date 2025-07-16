@@ -430,54 +430,59 @@ impl Codec for WavCodec {
     }
 
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
+        if !file_path.ends_with(".wav") {
+            return Err(anyhow!(
+                "WAV codec can only extract metadata from .wav files"
+            ));
+        }
+
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
 
         // Let's check the channel count in the WAV header before extraction
-        if file_path.ends_with(".wav") {
-            let mut cursor = Cursor::new(&mapped_file);
 
-            // Read RIFF header first to validate
-            let mut header = [0u8; 12];
-            if cursor.read_exact(&mut header).is_ok() {
-                if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-                    // Not a valid WAVE file
-                } else {
-                    // Look for the fmt chunk
-                    while cursor.position() < mapped_file.len() as u64 {
-                        let mut chunk_id = [0u8; 4];
-                        if cursor.read(&mut chunk_id)? < 4 {
+        let mut cursor = Cursor::new(&mapped_file);
+
+        // Read RIFF header first to validate
+        let mut header = [0u8; 12];
+        if cursor.read_exact(&mut header).is_ok() {
+            if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+                // Not a valid WAVE file
+            } else {
+                // Look for the fmt chunk
+                while cursor.position() < mapped_file.len() as u64 {
+                    let mut chunk_id = [0u8; 4];
+                    if cursor.read(&mut chunk_id)? < 4 {
+                        break;
+                    }
+
+                    let chunk_size = cursor.read_u32::<LittleEndian>()?;
+
+                    if &chunk_id == FMT_CHUNK_ID {
+                        // Found fmt chunk
+                        if chunk_size >= 16 {
+                            // Ensure fmt chunk is at least standard size
+                            // Format type
+                            let _format_tag = cursor.read_u16::<LittleEndian>()?;
+                            // Channel count is right after format tag
+                            let channel_count = cursor.read_u16::<LittleEndian>()?;
+
+                            // Validate the channel count
+                            if !(1..=128).contains(&channel_count) {
+                                // Suspicious channel count
+                            }
+
+                            // Get sample rate while we're at it
+                            let _sample_rate = cursor.read_u32::<LittleEndian>()?;
+
+                            // Don't need to read further in fmt chunk
                             break;
                         }
-
-                        let chunk_size = cursor.read_u32::<LittleEndian>()?;
-
-                        if &chunk_id == FMT_CHUNK_ID {
-                            // Found fmt chunk
-                            if chunk_size >= 16 {
-                                // Ensure fmt chunk is at least standard size
-                                // Format type
-                                let _format_tag = cursor.read_u16::<LittleEndian>()?;
-                                // Channel count is right after format tag
-                                let channel_count = cursor.read_u16::<LittleEndian>()?;
-
-                                // Validate the channel count
-                                if !(1..=128).contains(&channel_count) {
-                                    // Suspicious channel count
-                                }
-
-                                // Get sample rate while we're at it
-                                let _sample_rate = cursor.read_u32::<LittleEndian>()?;
-
-                                // Don't need to read further in fmt chunk
-                                break;
-                            }
-                        } else {
-                            // Skip this chunk
-                            cursor.seek(SeekFrom::Current(
-                                chunk_size as i64 + (chunk_size % 2) as i64,
-                            ))?;
-                        }
+                    } else {
+                        // Skip this chunk
+                        cursor.seek(SeekFrom::Current(
+                            chunk_size as i64 + (chunk_size % 2) as i64,
+                        ))?;
                     }
                 }
             }
@@ -488,8 +493,98 @@ impl Codec for WavCodec {
             "extract_file_metadata_chunks - Found {} metadata chunks",
             chunks.len()
         );
-        Ok(Metadata::Wav(chunks))
+        let mut metadata = Metadata::default();
+        for chunk in chunks {
+            if let MetadataChunk::Picture(image) = chunk {
+                metadata.images.push(image);
+
+                continue;
+                // Handle picture chunk
+            }
+            let m = chunk.parse()?;
+            m.into_iter().for_each(|(key, value)| {
+                metadata.map.insert(key, value);
+            });
+        }
+
+        Ok(metadata)
     }
+
+    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+        let mut metadata = Metadata::new();
+        let mut cursor = Cursor::new(input);
+        
+        // Validate WAV header
+        self.validate_file_format(input)?;
+        
+        // Skip RIFF header (12 bytes)
+        cursor.set_position(12);
+        
+        // Parse chunks
+        while cursor.position() < input.len() as u64 {
+            // Read chunk header
+            let chunk_id = match cursor.read_u32::<LittleEndian>() {
+                Ok(id) => id,
+                Err(_) => break, // End of file
+            };
+            
+            let chunk_size = match cursor.read_u32::<LittleEndian>() {
+                Ok(size) => size as usize,
+                Err(_) => break,
+            };
+            
+            let chunk_start = cursor.position() as usize;
+            
+            // Ensure we don't read past the end of the input
+            if chunk_start + chunk_size > input.len() {
+                break;
+            }
+            
+            let chunk_data = &input[chunk_start..chunk_start + chunk_size];
+            
+            // Parse different chunk types
+            match &chunk_id.to_le_bytes() {
+                b"bext" => {
+                    metadata.parse_bext(chunk_data)?;
+                }
+                b"iXML" => {
+                    let xml_str = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref());
+                    metadata.parse_ixml(xml_str)?;
+                }
+                b"ID3 " | b"id3 " => {
+                    metadata.parse_id3(chunk_data)?;
+                }
+                b"SMED" => {
+                    // Soundminer metadata - for now just store as raw data
+                    metadata.set_field("Soundminer", "present")?;
+                }
+                _ => {
+                    // Check if it's a text chunk (4 printable ASCII characters)
+                    let chunk_id_str = String::from_utf8_lossy(&chunk_id.to_le_bytes());
+                    if chunk_id_str.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                        let text_value = std::str::from_utf8(chunk_data)
+                            .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                            .trim_end_matches('\0')
+                            .trim();
+                        if !text_value.is_empty() {
+                            metadata.set_field(&chunk_id_str.trim(), text_value)?;
+                        }
+                    }
+                }
+            }
+            
+            // Move to next chunk (pad to even byte boundary)
+            cursor.set_position(chunk_start as u64 + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1);
+            }
+        }
+        
+        Ok(metadata)
+    }
+
+    // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
 
     fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
         let mut cursor = Cursor::new(input);
@@ -547,11 +642,12 @@ impl Codec for WavCodec {
                     if data.len() > 8 {
                         // Simple picture extraction
                         // In a real implementation, you'd parse the APIC structure properly
-                        chunks.push(MetadataChunk::Picture {
+                        let image_chunk = ImageChunk {
                             mime_type: "image/jpeg".to_string(), // Default assumption
                             description: "Album Art".to_string(),
                             data: data.clone(),
-                        });
+                        };
+                        chunks.push(MetadataChunk::Picture(image_chunk));
                     }
 
                     // Also keep the raw data
@@ -738,15 +834,9 @@ impl Codec for WavCodec {
                     }
                     ixml_chunks.push(MetadataChunk::IXml(updated_xml));
                 }
-                MetadataChunk::Picture {
-                    mime_type,
-                    description,
-                    data,
-                } => picture_chunks.push(MetadataChunk::Picture {
-                    mime_type: mime_type.clone(),
-                    description: description.clone(),
-                    data: data.clone(),
-                }),
+                MetadataChunk::Picture(image_chunk) => {
+                    picture_chunks.push(MetadataChunk::Picture(image_chunk.clone()))
+                }
                 MetadataChunk::ID3(data) => id3_chunks.push(MetadataChunk::ID3(data.clone())),
                 MetadataChunk::TextTag { key, value } => text_tags.push(MetadataChunk::TextTag {
                     key: key.clone(),

@@ -1113,6 +1113,46 @@ impl Codec for WvCodec {
         Ok(Metadata::Wav(chunks)) // Use WAV metadata type for compatibility
     }
 
+    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+        let mut metadata = Metadata::new();
+        
+        // Use the WavpackDecoder to handle metadata extraction
+        let decoder = WavpackDecoder::new(input)?;
+        let chunks = decoder.extract_metadata()?;
+        
+        // Parse each chunk into the metadata struct
+        for chunk in chunks {
+            match chunk {
+                MetadataChunk::Picture(image) => {
+                    metadata.add_image(image);
+                }
+                MetadataChunk::TextTag { key, value } => {
+                    metadata.set_field(&key, &value)?;
+                }
+                MetadataChunk::Bext(data) => {
+                    metadata.parse_bext(&data)?;
+                }
+                MetadataChunk::IXml(xml) => {
+                    metadata.parse_ixml(&xml)?;
+                }
+                MetadataChunk::ID3(data) => {
+                    metadata.parse_id3(&data)?;
+                }
+                MetadataChunk::Soundminer(_) => {
+                    metadata.set_field("Soundminer", "present")?;
+                }
+                MetadataChunk::Unknown { id, .. } => {
+                    metadata.set_field(&format!("Unknown_{}", id), "present")?;
+                }
+                _ => {}
+            }
+        }
+        
+        Ok(metadata)
+    }
+
+    // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
+
     fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
         // Use the WavpackDecoder to handle metadata extraction
         let decoder = WavpackDecoder::new(input)?;

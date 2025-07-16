@@ -369,6 +369,120 @@ impl Codec for AifCodec {
         Ok(Metadata::Wav(chunks)) // Use WAV metadata type since AIFF uses similar chunk structure
     }
 
+    fn parse_metadata_directly(&self, input: &[u8]) -> R<Metadata> {
+        let mut metadata = Metadata::new();
+        let mut cursor = Cursor::new(input);
+        
+        // Validate AIFF header
+        let mut header = [0u8; 12];
+        cursor.read_exact(&mut header)?;
+        
+        if &header[0..4] != b"FORM" || &header[8..12] != b"AIFF" {
+            return Err(anyhow!("Invalid AIFF header"));
+        }
+        
+        // Parse chunks
+        while cursor.position() < input.len() as u64 {
+            // Read chunk header
+            let chunk_id = match cursor.read_u32::<BigEndian>() {
+                Ok(id) => id,
+                Err(_) => break,
+            };
+            
+            let chunk_size = match cursor.read_u32::<BigEndian>() {
+                Ok(size) => size as usize,
+                Err(_) => break,
+            };
+            
+            let chunk_start = cursor.position() as usize;
+            
+            // Ensure we don't read past the end of the input
+            if chunk_start + chunk_size > input.len() {
+                break;
+            }
+            
+            let chunk_data = &input[chunk_start..chunk_start + chunk_size];
+            
+            // Parse different chunk types
+            match &chunk_id.to_be_bytes() {
+                b"NAME" => {
+                    // Name chunk - contains title
+                    let name = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                        .trim_end_matches('\0')
+                        .trim();
+                    if !name.is_empty() {
+                        metadata.set_field("Title", name)?;
+                    }
+                }
+                b"AUTH" => {
+                    // Author chunk - contains artist
+                    let author = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                        .trim_end_matches('\0')
+                        .trim();
+                    if !author.is_empty() {
+                        metadata.set_field("Artist", author)?;
+                    }
+                }
+                b"(c) " => {
+                    // Copyright chunk
+                    let copyright = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                        .trim_end_matches('\0')
+                        .trim();
+                    if !copyright.is_empty() {
+                        metadata.set_field("Copyright", copyright)?;
+                    }
+                }
+                b"ANNO" => {
+                    // Annotation chunk - contains comments
+                    let annotation = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                        .trim_end_matches('\0')
+                        .trim();
+                    if !annotation.is_empty() {
+                        metadata.set_field("Comment", annotation)?;
+                    }
+                }
+                b"iXML" => {
+                    // iXML chunk
+                    let xml_str = std::str::from_utf8(chunk_data)
+                        .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref());
+                    metadata.parse_ixml(xml_str)?;
+                }
+                b"ID3 " | b"id3 " => {
+                    // ID3 chunk
+                    metadata.parse_id3(chunk_data)?;
+                }
+                _ => {
+                    // Check if it's a text chunk (4 printable ASCII characters)
+                    let chunk_id_str = String::from_utf8_lossy(&chunk_id.to_be_bytes());
+                    if chunk_id_str.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                        let text_value = std::str::from_utf8(chunk_data)
+                            .unwrap_or_else(|_| std::str::from_utf8_lossy(chunk_data).as_ref())
+                            .trim_end_matches('\0')
+                            .trim();
+                        if !text_value.is_empty() {
+                            metadata.set_field(&chunk_id_str.trim(), text_value)?;
+                        }
+                    }
+                }
+            }
+            
+            // Move to next chunk (pad to even byte boundary)
+            cursor.set_position(chunk_start as u64 + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1);
+            }
+        }
+        
+        Ok(metadata)
+    }
+
+    // Helper methods for parsing specific chunk types
+    // Helper methods for parsing specific chunk types have been moved to centralized functions in codecs.rs
+
     fn extract_metadata_chunks(&self, input: &[u8]) -> R<Vec<MetadataChunk>> {
         let mut cursor = Cursor::new(input);
 
