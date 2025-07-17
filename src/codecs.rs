@@ -137,22 +137,6 @@ impl Metadata {
         }
     }
 
-    // pub fn from(chunks: &[MetadataChunk]) -> Self {
-    //     let mut map = std::collections::HashMap::new();
-    //     let mut images = Vec::new();
-    //     for chunk in chunks {
-    //         match chunk {
-    //             MetadataChunk::Picture(image) => {
-    //                 images.push(image.clone());
-    //             }
-    //             _ => {
-    //                 let _ = chunk.parse(&mut map);
-    //             }
-    //         }
-    //     }
-    //     Self { map, images }
-    // }
-
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
         self.map.insert(key.to_string(), value.to_string());
         Ok(())
@@ -172,6 +156,17 @@ impl Metadata {
 
     pub fn get_all_fields(&self) -> &std::collections::HashMap<String, String> {
         &self.map
+    }
+
+    pub fn print(&self) {
+        for (key, value) in &self.map {
+            println!("{}: {}", key, value);
+        }
+        if !self.images.is_empty() {
+            println!("Images: {} found", self.images.len());
+        } else {
+            println!("No images found");
+        }
     }
 }
 

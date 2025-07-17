@@ -287,6 +287,13 @@ impl Codex {
         })?;
         codec.get_file_info(self.path.to_str().unwrap())
     }
+    pub fn print_metadata(&self) {
+        if let Some(metadata) = &self.metadata {
+            metadata.print();
+        } else {
+            println!("No metadata available");
+        }
+    }
 }
 
 pub trait Codec: Send + Sync {

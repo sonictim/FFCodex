@@ -3,7 +3,9 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(cargo check:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(ls:*)",
+      "Bash(cargo build:*)"
     ],
     "deny": []
   }

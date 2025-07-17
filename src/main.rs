@@ -46,6 +46,8 @@ fn main() -> R<()> {
 
     let mut c = Codex::new(input_file)?.extract_metadata()?;
 
+    c.print_metadata();
+
     println!("{:?}", c.get_metadata_field("USER_DESIGNER"));
     c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
     c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
