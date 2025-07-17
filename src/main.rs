@@ -29,36 +29,38 @@ fn main() -> R<()> {
     let data = get_basic_metadata(input_file)?;
     println!("Basic metadata: {:?}", data);
 
-    // let fp = get_fingerprint(input_file)?;
-    // println!("Fingerprint: {}", fp);
+    let fp = get_fingerprint(input_file)?;
+    println!("Fingerprint: {}", fp);
 
-    // let elapsed_time = start_time.elapsed();
-    // println!(
-    //     "Finished fingerprinting  in {} seconds",
-    //     elapsed_time.as_secs_f32()
-    // );
+    let elapsed_time = start_time.elapsed();
+    println!(
+        "Finished fingerprinting  in {} seconds",
+        elapsed_time.as_secs_f32()
+    );
 
     let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
 
     // // flac_debug(input_file)?;
 
-    // let start_time = std::time::Instant::now();
+    let start_time = std::time::Instant::now();
 
     let mut c = Codex::new(input_file)?.extract_metadata()?;
 
     c.print_metadata();
 
-    println!("{:?}", c.get_metadata_field("USER_DESIGNER"));
+    println!("BEFORE: USER_DESIGNER = {:?}", c.get_metadata_field("USER_DESIGNER"));
     c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
     c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
+    println!("AFTER SET: USER_DESIGNER = {:?}", c.get_metadata_field("USER_DESIGNER"));
+    
     // c.convert_dual_mono()?;
     c.embed_metadata(output_file)?;
     // clean_multi_mono(input_file)?;
 
     let c2 = Codex::new(output_file)?.extract_metadata()?;
 
-    println!("{:?}", c2.get_metadata_field("USER_DESIGNER"));
-    println!("{:?}", c2.get_metadata_field("DESCRIPTION"));
+    println!("AFTER EMBED: USER_DESIGNER = {:?}", c2.get_metadata_field("USER_DESIGNER"));
+    println!("AFTER EMBED: DESCRIPTION = {:?}", c2.get_metadata_field("DESCRIPTION"));
     c2.embed_metadata(output_file)?;
 
     let elapsed_time = start_time.elapsed();

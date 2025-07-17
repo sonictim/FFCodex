@@ -36,6 +36,16 @@ const BYTE_MASK: i32 = 0xFF;
 
 pub struct WavCodec;
 
+#[derive(Debug, Clone)]
+struct AudioInfo {
+    format_tag: u16,
+    channels: u16,
+    sample_rate: u32,
+    byte_rate: u32,
+    block_align: u16,
+    bits_per_sample: u16,
+}
+
 impl Codec for WavCodec {
     fn file_extension(&self) -> &'static str {
         "wav"
@@ -492,24 +502,16 @@ impl Codec for WavCodec {
                 b"ID3 " | b"id3 " => {
                     metadata.parse_id3(chunk_data)?;
                 }
-                b"SMED" => {
-                    // Soundminer metadata - for now just store as raw data
-                    metadata.set_field("Soundminer", "present")?;
+                b"SMED" | b"SMRD" | b"SMPL" | b"APIC" => {
+                    // Skip binary metadata chunks - these contain non-text data
+                    // SMED = Soundminer metadata (binary)
+                    // SMRD = Soundminer (binary)
+                    // SMPL = Sample data (binary)
+                    // APIC = Album picture (binary)
                 }
                 _ => {
-                    // Check if it's a text chunk (4 printable ASCII characters)
-                    let chunk_id_bytes = chunk_id.to_le_bytes();
-                    let chunk_id_str = String::from_utf8_lossy(&chunk_id_bytes);
-                    if chunk_id_str
-                        .chars()
-                        .all(|c| c.is_ascii_graphic() || c == ' ')
-                    {
-                        let text_cow = String::from_utf8_lossy(chunk_data);
-                        let text_value = text_cow.trim_end_matches('\0').trim();
-                        if !text_value.is_empty() {
-                            metadata.set_field(&chunk_id_str.trim(), text_value)?;
-                        }
-                    }
+                    // Skip unknown chunks - only process known text-based chunks above
+                    // This prevents binary data from being interpreted as text
                 }
             }
 
@@ -539,17 +541,53 @@ impl Codec for WavCodec {
 
 impl WavCodec {
     fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
-        let mut cursor = Cursor::new(input);
         let mut output = Cursor::new(Vec::new());
 
-        // Copy the RIFF/WAVE header
-        let mut riff_header = [0u8; 12];
-        cursor.read_exact(&mut riff_header)?;
-        output.write_all(&riff_header)?;
+        // Extract audio data and get format info
+        let (audio_info, data_chunk) = self.extract_audio_data(input)?;
 
-        // Copy fmt and data chunks, skipping old metadata chunks
-        let mut fmt_chunk_found = false;
-        let mut data_chunk_found = false;
+        // Start building the clean WAV file
+        // Write RIFF header (will update size later)
+        output.write_all(b"RIFF")?;
+        output.write_u32::<LittleEndian>(0)?; // Placeholder for file size
+        output.write_all(b"WAVE")?;
+
+        // Write fmt chunk - build from audio info
+        self.write_fmt_chunk(&mut output, &audio_info)?;
+
+        // Write BEXT chunk from metadata
+        self.write_bext_chunk(&mut output, metadata)?;
+
+        // Write iXML chunk from metadata
+        self.write_ixml_chunk(&mut output, metadata)?;
+
+        // Write image chunks if any exist
+        self.write_image_chunks(&mut output, metadata)?;
+
+        // Write data chunk
+        output.write_all(b"data")?;
+        output.write_u32::<LittleEndian>(data_chunk.len() as u32)?;
+        output.write_all(&data_chunk)?;
+        if data_chunk.len() % 2 == 1 {
+            output.write_all(&[0])?; // Padding
+        }
+
+        // Update RIFF file size
+        let total_size = output.position() as u32 - 8; // Exclude RIFF header itself
+        output.seek(SeekFrom::Start(4))?;
+        output.write_u32::<LittleEndian>(total_size)?;
+
+        Ok(output.into_inner())
+    }
+
+    fn extract_audio_data(&self, input: &[u8]) -> R<(AudioInfo, Vec<u8>)> {
+        let mut cursor = Cursor::new(input);
+
+        // Skip RIFF header
+        cursor.seek(SeekFrom::Start(12))?;
+
+        let mut audio_info = None;
+        let mut data_chunk = None;
 
         while cursor.position() < input.len() as u64 {
             let mut chunk_id = [0u8; 4];
@@ -558,193 +596,190 @@ impl WavCodec {
             }
 
             let chunk_size = cursor.read_u32::<LittleEndian>()?;
+            let chunk_start = cursor.position();
 
             match &chunk_id {
                 FMT_CHUNK_ID => {
-                    fmt_chunk_found = true;
-                    // Copy fmt chunk as-is
-                    output.write_all(&chunk_id)?;
-                    output.write_u32::<LittleEndian>(chunk_size)?;
+                    // Parse fmt chunk to get audio format info
+                    let format_tag = cursor.read_u16::<LittleEndian>()?;
+                    let channels = cursor.read_u16::<LittleEndian>()?;
+                    let sample_rate = cursor.read_u32::<LittleEndian>()?;
+                    let byte_rate = cursor.read_u32::<LittleEndian>()?;
+                    let block_align = cursor.read_u16::<LittleEndian>()?;
+                    let bits_per_sample = cursor.read_u16::<LittleEndian>()?;
 
-                    let mut chunk_data = vec![0u8; chunk_size as usize];
-                    cursor.read_exact(&mut chunk_data)?;
-                    output.write_all(&chunk_data)?;
-
-                    // Handle padding
-                    if chunk_size % 2 == 1 {
-                        cursor.seek(SeekFrom::Current(1))?;
-                        output.write_all(&[0])?;
-                    }
+                    audio_info = Some(AudioInfo {
+                        format_tag,
+                        channels,
+                        sample_rate,
+                        byte_rate,
+                        block_align,
+                        bits_per_sample,
+                    });
                 }
                 DATA_CHUNK_ID => {
-                    data_chunk_found = true;
-                    // Copy data chunk as-is
-                    output.write_all(&chunk_id)?;
-                    output.write_u32::<LittleEndian>(chunk_size)?;
-
                     let mut chunk_data = vec![0u8; chunk_size as usize];
                     cursor.read_exact(&mut chunk_data)?;
-                    output.write_all(&chunk_data)?;
-
-                    // Handle padding
-                    if chunk_size % 2 == 1 {
-                        cursor.seek(SeekFrom::Current(1))?;
-                        output.write_all(&[0])?;
-                    }
-                }
-                // Skip existing metadata chunks - we'll recreate them
-                b"bext" | b"iXML" | b"ID3 " | b"id3 " | b"SMED" | b"SMRD" | b"SMPL" | b"APIC" => {
-                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
-                    if chunk_size % 2 == 1 {
-                        cursor.seek(SeekFrom::Current(1))?;
-                    }
+                    data_chunk = Some(chunk_data);
                 }
                 _ => {
-                    // Copy unknown chunks as-is
-                    output.write_all(&chunk_id)?;
-                    output.write_u32::<LittleEndian>(chunk_size)?;
-
-                    let mut chunk_data = vec![0u8; chunk_size as usize];
-                    cursor.read_exact(&mut chunk_data)?;
-                    output.write_all(&chunk_data)?;
-
-                    // Handle padding
-                    if chunk_size % 2 == 1 {
-                        cursor.seek(SeekFrom::Current(1))?;
-                        output.write_all(&[0])?;
-                    }
+                    // Skip all other chunks
                 }
+            }
+
+            // Move to next chunk (pad to even byte boundary)
+            cursor.set_position(chunk_start + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1);
             }
         }
 
-        if !fmt_chunk_found || !data_chunk_found {
-            return Err(anyhow!("Invalid WAV file: missing fmt or data chunk"));
-        }
+        let audio_info = audio_info.ok_or_else(|| anyhow!("No fmt chunk found"))?;
+        let data_chunk = data_chunk.ok_or_else(|| anyhow!("No data chunk found"))?;
 
-        // Create and write bext chunk from hashmap
-        self.write_bext_chunk(&mut output, metadata)?;
+        Ok((audio_info, data_chunk))
+    }
 
-        // Create and write iXML chunk from hashmap
-        self.write_ixml_chunk(&mut output, metadata)?;
+    fn write_fmt_chunk(&self, output: &mut Cursor<Vec<u8>>, audio_info: &AudioInfo) -> R<()> {
+        output.write_all(b"fmt ")?;
+        output.write_u32::<LittleEndian>(16)?; // Standard PCM fmt chunk size
 
-        // Write image chunks
-        for image in metadata.get_images() {
-            self.write_image_chunk(&mut output, image)?;
-        }
+        // Write format data
+        output.write_u16::<LittleEndian>(audio_info.format_tag)?;
+        output.write_u16::<LittleEndian>(audio_info.channels)?;
+        output.write_u32::<LittleEndian>(audio_info.sample_rate)?;
+        output.write_u32::<LittleEndian>(audio_info.byte_rate)?;
+        output.write_u16::<LittleEndian>(audio_info.block_align)?;
+        output.write_u16::<LittleEndian>(audio_info.bits_per_sample)?;
 
-        // Update RIFF chunk size
-        let final_size = output.position() as u32 - 8;
-        let mut result_data = output.into_inner();
-        (&mut result_data[4..8]).write_u32::<LittleEndian>(final_size)?;
-
-        Ok(result_data)
+        Ok(())
     }
 
     fn write_bext_chunk(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
         let mut bext_data = vec![0u8; 602]; // BWF spec minimum size
 
-        // Description (256 bytes) - look for Description field
-        if let Some(description) = metadata.get_field("Description") {
+        // Description (256 bytes) - try multiple field names
+        if let Some(description) = metadata
+            .get_field("BEXT_BWF_DESCRIPTION")
+            .or_else(|| metadata.get_field("Description"))
+        {
             let bytes = description.as_bytes();
             let len = std::cmp::min(bytes.len(), 255);
             bext_data[..len].copy_from_slice(&bytes[..len]);
         }
 
-        // Originator (32 bytes) - look for Originator field
-        if let Some(originator) = metadata.get_field("Originator") {
+        // Originator (32 bytes) - try multiple field names
+        if let Some(originator) = metadata
+            .get_field("BEXT_BWF_ORIGINATOR")
+            .or_else(|| metadata.get_field("Originator"))
+        {
             let bytes = originator.as_bytes();
             let len = std::cmp::min(bytes.len(), 31);
             bext_data[256..256 + len].copy_from_slice(&bytes[..len]);
         }
 
-        // OriginatorReference (32 bytes) - look for OriginatorReference field
-        if let Some(orig_ref) = metadata.get_field("OriginatorReference") {
+        // OriginatorReference (32 bytes) - try multiple field names
+        if let Some(orig_ref) = metadata
+            .get_field("BEXT_BWF_ORIGINATOR_REFERENCE")
+            .or_else(|| metadata.get_field("OriginatorReference"))
+        {
             let bytes = orig_ref.as_bytes();
             let len = std::cmp::min(bytes.len(), 31);
             bext_data[288..288 + len].copy_from_slice(&bytes[..len]);
         }
 
-        // OriginationDate (10 bytes) - look for OriginationDate field
+        // OriginationDate (10 bytes)
         if let Some(date) = metadata.get_field("OriginationDate") {
             let bytes = date.as_bytes();
             let len = std::cmp::min(bytes.len(), 10);
             bext_data[320..320 + len].copy_from_slice(&bytes[..len]);
         }
 
-        // OriginationTime (8 bytes) - look for OriginationTime field
+        // OriginationTime (8 bytes)
         if let Some(time) = metadata.get_field("OriginationTime") {
             let bytes = time.as_bytes();
             let len = std::cmp::min(bytes.len(), 8);
             bext_data[330..330 + len].copy_from_slice(&bytes[..len]);
         }
 
-        // TimeReference (8 bytes) - look for TimeReference field
-        if let Some(time_ref) = metadata.get_field("TimeReference") {
-            if let Ok(time_ref_u64) = time_ref.parse::<u64>() {
-                let bytes = time_ref_u64.to_le_bytes();
-                bext_data[338..346].copy_from_slice(&bytes);
+        // TimeReference (8 bytes) - try multiple field names
+        if let Some(time_ref) = metadata
+            .get_field("TimeReference")
+            .or_else(|| metadata.get_field("BEXT_BWF_TIME_REFERENCE_LOW"))
+        {
+            if let Ok(time_ref_val) = time_ref.parse::<u64>() {
+                (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
             }
         }
 
-        // Write the bext chunk
-        write_chunk(output, b"bext", &bext_data)?;
+        // Write bext chunk
+        output.write_all(b"bext")?;
+        output.write_u32::<LittleEndian>(bext_data.len() as u32)?;
+        output.write_all(&bext_data)?;
+        if bext_data.len() % 2 == 1 {
+            output.write_all(&[0])?; // Padding
+        }
+
         Ok(())
     }
 
     fn write_ixml_chunk(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
-        let mut ixml_content = String::new();
-
-        // Add XML header
-        ixml_content.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        ixml_content.push_str("<BWFXML>\n");
-
-        // Add all fields from the hashmap to iXML
-        for (key, value) in metadata.get_all_fields().iter() {
-            // Skip special fields that go in bext
-            if matches!(
-                key.as_str(),
-                "Description"
-                    | "Originator"
-                    | "OriginatorReference"
-                    | "OriginationDate"
-                    | "OriginationTime"
-                    | "TimeReference"
-            ) {
-                continue;
+        let ixml_content = self.create_ixml_from_metadata(metadata)?;
+        if !ixml_content.trim().is_empty() {
+            let ixml_bytes = ixml_content.as_bytes();
+            output.write_all(b"iXML")?;
+            output.write_u32::<LittleEndian>(ixml_bytes.len() as u32)?;
+            output.write_all(ixml_bytes)?;
+            if ixml_bytes.len() % 2 == 1 {
+                output.write_all(&[0])?; // Padding
             }
-
-            ixml_content.push_str(&format!("  <{}>{}</{}>\n", key, value, key));
         }
-
-        ixml_content.push_str("</BWFXML>\n");
-
-        // Write the iXML chunk
-        write_chunk(output, b"iXML", ixml_content.as_bytes())?;
         Ok(())
     }
 
-    fn write_image_chunk(&self, output: &mut Cursor<Vec<u8>>, image: &ImageChunk) -> R<()> {
-        // For WAV files, we'll use a custom chunk format for images
-        // This is similar to APIC in ID3v2
-
-        let mut image_data = Vec::new();
-
-        // Write mime type length and data
-        let mime_bytes = image.mime_type().as_bytes();
-        image_data.extend_from_slice(&(mime_bytes.len() as u32).to_le_bytes());
-        image_data.extend_from_slice(mime_bytes);
-
-        // Write description length and data
-        let desc_bytes = image.description().as_bytes();
-        image_data.extend_from_slice(&(desc_bytes.len() as u32).to_le_bytes());
-        image_data.extend_from_slice(desc_bytes);
-
-        // Write image data
-        image_data.extend_from_slice(image.data());
-
-        // Write the APIC chunk
-        write_chunk(output, b"APIC", &image_data)?;
+    fn write_image_chunks(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
+        // Write image chunks if any exist
+        for image in metadata.get_images() {
+            output.write_all(b"APIC")?; // Or use appropriate chunk ID
+            output.write_u32::<LittleEndian>(image.data.len() as u32)?;
+            output.write_all(&image.data)?;
+            if image.data.len() % 2 == 1 {
+                output.write_all(&[0])?; // Padding
+            }
+        }
         Ok(())
+    }
+
+    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<BWFXML>\n");
+        xml.push_str("  <IXML_VERSION>1.61</IXML_VERSION>\n");
+        xml.push_str("  <BWF_METADATA>\n");
+
+        // Add all metadata fields to iXML
+        for (key, value) in metadata.get_all_fields() {
+            if !key.is_empty() && !value.is_empty() {
+                let escaped_key = self.xml_escape(key);
+                let escaped_value = self.xml_escape(value);
+                xml.push_str(&format!(
+                    "    <{}>{}</{}>\n",
+                    escaped_key, escaped_value, escaped_key
+                ));
+            }
+        }
+
+        xml.push_str("  </BWF_METADATA>\n");
+        xml.push_str("</BWFXML>\n");
+        Ok(xml)
+    }
+
+    fn xml_escape(&self, text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
     }
 }
 
