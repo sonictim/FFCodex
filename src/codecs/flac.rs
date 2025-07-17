@@ -9,8 +9,7 @@ const FLAC_MARKER: &[u8; 4] = b"fLaC";
 const STREAMINFO_BLOCK_TYPE: u8 = 0;
 // const SEEKTABLE_BLOCK_TYPE: u8 = 3;
 const VORBIS_COMMENT_BLOCK_TYPE: u8 = 4;
-const PICTURE_BLOCK_TYPE: u8 = 6;
-const LAST_METADATA_BLOCK_FLAG: u8 = 0x80;
+// Note: PICTURE_BLOCK_TYPE and LAST_METADATA_BLOCK_FLAG removed as unused
 
 // Sample normalization constants
 const I16_MAX_F: f32 = 32767.0;
@@ -452,7 +451,7 @@ impl Codec for FlacCodec {
         if let Ok(tag) = Tag::read_from_path(&temp_file) {
             // Parse Vorbis comments
             if let Some(comments) = tag.vorbis_comments() {
-                for (key, values) in comments.iter() {
+                for (key, values) in &comments.comments {
                     if !values.is_empty() {
                         let standard_key = self.normalize_vorbis_key(key);
                         metadata.set_field(&standard_key, &values[0])?;

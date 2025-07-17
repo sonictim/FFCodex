@@ -21,7 +21,7 @@ fn main() -> R<()> {
     // };
 
     // let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/Cloth-Blanket-Vinyl-Backing-Movement_GEN-HD2-28950MOD.flac";
-    let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR copy.flac";
+    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.wav";
 
     // clean_multi_mono(input_file)?;
 
@@ -38,7 +38,7 @@ fn main() -> R<()> {
     //     elapsed_time.as_secs_f32()
     // );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
 
     // // flac_debug(input_file)?;
 
@@ -46,20 +46,16 @@ fn main() -> R<()> {
 
     let mut c = Codex::new(input_file)?.extract_metadata()?;
 
-    c.parse_metadata()?;
     println!("{:?}", c.get_metadata_field("USER_DESIGNER"));
     c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
-    println!("{:?}", c.get_metadata_field("USER_DESIGNER"));
-    c.remove_soundminer_metadata_chunk()?;
+    c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
     // c.convert_dual_mono()?;
     c.embed_metadata(output_file)?;
     // clean_multi_mono(input_file)?;
 
-    let mut c2 = Codex::new(output_file)?.extract_metadata()?;
+    let c2 = Codex::new(output_file)?.extract_metadata()?;
 
-    c2.parse_metadata()?;
-    println!("{:?}", c2.get_metadata_field("DESCRIPTION"));
-    c2.set_metadata_field("DESCRIPTION", "Two junkings together")?;
+    println!("{:?}", c2.get_metadata_field("USER_DESIGNER"));
     println!("{:?}", c2.get_metadata_field("DESCRIPTION"));
     c2.embed_metadata(output_file)?;
 

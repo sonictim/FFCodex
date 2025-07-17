@@ -396,36 +396,32 @@ impl Codec for AifCodec {
             match &chunk_id.to_be_bytes() {
                 b"NAME" => {
                     // Name chunk - contains title
-                    let name = String::from_utf8_lossy(chunk_data)
-                        .trim_end_matches('\0')
-                        .trim();
+                    let name_str = String::from_utf8_lossy(chunk_data);
+                    let name = name_str.trim_end_matches('\0').trim();
                     if !name.is_empty() {
                         metadata.set_field("Title", name)?;
                     }
                 }
                 b"AUTH" => {
                     // Author chunk - contains artist
-                    let author = String::from_utf8_lossy(chunk_data)
-                        .trim_end_matches('\0')
-                        .trim();
+                    let author_str = String::from_utf8_lossy(chunk_data);
+                    let author = author_str.trim_end_matches('\0').trim();
                     if !author.is_empty() {
                         metadata.set_field("Artist", author)?;
                     }
                 }
                 b"(c) " => {
                     // Copyright chunk
-                    let copyright = String::from_utf8_lossy(chunk_data)
-                        .trim_end_matches('\0')
-                        .trim();
+                    let copyright_str = String::from_utf8_lossy(chunk_data);
+                    let copyright = copyright_str.trim_end_matches('\0').trim();
                     if !copyright.is_empty() {
                         metadata.set_field("Copyright", copyright)?;
                     }
                 }
                 b"ANNO" => {
                     // Annotation chunk - contains comments
-                    let annotation = String::from_utf8_lossy(chunk_data)
-                        .trim_end_matches('\0')
-                        .trim();
+                    let annotation_str = String::from_utf8_lossy(chunk_data);
+                    let annotation = annotation_str.trim_end_matches('\0').trim();
                     if !annotation.is_empty() {
                         metadata.set_field("Comment", annotation)?;
                     }
@@ -441,16 +437,17 @@ impl Codec for AifCodec {
                 }
                 _ => {
                     // Check if it's a text chunk (4 printable ASCII characters)
-                    let chunk_id_str = String::from_utf8_lossy(&chunk_id.to_be_bytes());
+                    let chunk_id_bytes = chunk_id.to_be_bytes();
+                    let chunk_id_str_val = String::from_utf8_lossy(&chunk_id_bytes);
+                    let chunk_id_str = chunk_id_str_val.trim();
                     if chunk_id_str
                         .chars()
                         .all(|c| c.is_ascii_graphic() || c == ' ')
                     {
-                        let text_value = String::from_utf8_lossy(chunk_data)
-                            .trim_end_matches('\0')
-                            .trim();
+                        let text_value_str = String::from_utf8_lossy(chunk_data);
+                        let text_value = text_value_str.trim_end_matches('\0').trim();
                         if !text_value.is_empty() {
-                            metadata.set_field(&chunk_id_str.trim(), text_value)?;
+                            metadata.set_field(chunk_id_str, text_value)?;
                         }
                     }
                 }
@@ -660,15 +657,7 @@ fn read_ieee_extended(cursor: &mut Cursor<&[u8]>) -> R<f64> {
     Ok(if sign { -result } else { result })
 }
 
-fn aiff_write_chunk<W: Write>(writer: &mut W, id: &[u8], data: &[u8]) -> R<()> {
-    writer.write_all(id)?;
-    writer.write_u32::<BigEndian>(data.len() as u32)?;
-    writer.write_all(data)?;
-    if data.len() % 2 == 1 {
-        writer.write_all(&[0])?; // padding
-    }
-    Ok(())
-}
+// Note: aiff_write_chunk function removed as unused
 
 fn decode_samples(
     input: &[u8],
@@ -881,77 +870,6 @@ fn write_ieee_extended<W: Write>(writer: &mut W, mut value: f64) -> R<()> {
 }
 
 // Helper function to read IEEE 80-bit extended float (required for AIFF)
-fn read_ieee_extended<E: Read>(reader: &mut E) -> R<f64> {
-    let mut buffer = [0u8; 10];
-    reader.read_exact(&mut buffer)?;
-
-    // Extract sign
-    let sign = if buffer[0] & 0x80 != 0 { -1.0 } else { 1.0 };
-
-    // Extract exponent
-    let exponent = (((buffer[0] as u16) & 0x7F) << 8) | (buffer[1] as u16);
-
-    // Handle special cases
-    if exponent == 0 && buffer[2..].iter().all(|&b| b == 0) {
-        return Ok(0.0);
-    }
-
-    // Handle infinity and NaN
-    if exponent == 0x7FFF {
-        if buffer[2..].iter().all(|&b| b == 0) {
-            return Ok(if sign == 1.0 {
-                f64::INFINITY
-            } else {
-                f64::NEG_INFINITY
-            });
-        } else {
-            return Ok(f64::NAN);
-        }
-    }
-
-    // Extract mantissa (IEEE 80-bit has explicit leading bit)
-    let mut mantissa: f64 = 0.0;
-    let mut bit_value = 1.0; // Start with implicit leading 1
-
-    // First bit of mantissa is explicit in 80-bit format
-    if buffer[2] & 0x80 != 0 {
-        mantissa += bit_value;
-    }
-    bit_value *= 0.5;
-
-    // Process remaining mantissa bits
-    for &byte in &buffer[2..] {
-        for bit_pos in (0..8).rev() {
-            if bit_pos == 7 && byte == buffer[2] {
-                continue; // Skip the explicit leading bit we already processed
-            }
-            if byte & (1 << bit_pos) != 0 {
-                mantissa += bit_value;
-            }
-            bit_value *= 0.5;
-        }
-    }
-
-    // Apply bias and scale - IEEE 80-bit uses bias of 16383
-    let real_exponent = exponent as i32 - 16383;
-
-    // Prevent overflow/underflow
-    if real_exponent > 1023 {
-        return Ok(if sign == 1.0 {
-            f64::INFINITY
-        } else {
-            f64::NEG_INFINITY
-        });
-    }
-    if real_exponent < -1022 {
-        return Ok(0.0);
-    }
-
-    // Calculate final value
-    let value = sign * mantissa * 2.0f64.powi(real_exponent);
-
-    Ok(value)
-}
 
 // A simpler, more direct implementation for common sample rates
 fn write_ieee_extended_simple<W: Write>(writer: &mut W, value: f64) -> R<()> {
