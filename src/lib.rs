@@ -163,13 +163,41 @@ impl Codex {
             Some(metadata) => metadata,
             None => return Err(anyhow::anyhow!("No metadata available to embed")),
         };
-        let codec = self.codec.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "No codec available for encoding metadata to file: {}",
-                self.path.display()
-            )
-        })?;
-        codec.embed_metadata_to_file(file_path, metadata)?;
+        
+        // Get codec based on OUTPUT file extension, not input file
+        let output_codec = get_codec(file_path)?;
+        
+        // If we have audio buffer, create a new file with audio + metadata
+        if let Some(buffer) = &self.buffer {
+            // First encode the audio to the target format
+            let encoded_data = output_codec.encode(&self.buffer)?;
+            
+            // Write the encoded data to file
+            std::fs::write(file_path, encoded_data)?;
+            
+            // Update metadata with the audio format information from the buffer
+            let mut updated_metadata = metadata.clone();
+            updated_metadata.sample_rate = buffer.sample_rate;
+            updated_metadata.channels = buffer.channels;
+            updated_metadata.bit_depth = match buffer.format {
+                SampleFormat::U8 => 8,
+                SampleFormat::I16 => 16,
+                SampleFormat::I24 => 24,
+                SampleFormat::I32 => 32,
+                SampleFormat::F32 => 32,
+            };
+            updated_metadata.format_tag = match buffer.format {
+                SampleFormat::F32 => 3, // IEEE float
+                _ => 1, // PCM
+            };
+            
+            
+            // Then embed metadata to the newly created file
+            output_codec.embed_metadata_to_file(file_path, &updated_metadata)?;
+        } else {
+            // If no audio buffer, just embed metadata (this might fail for some formats)
+            output_codec.embed_metadata_to_file(file_path, metadata)?;
+        }
 
         Ok(())
     }
@@ -177,7 +205,7 @@ impl Codex {
     pub fn set_metadata_field(&mut self, key: &str, value: &str) -> R<()> {
         match &mut self.metadata {
             Some(metadata) => {
-                metadata.set_field(key, value);
+                metadata.set_field(key, value)?;
                 Ok(())
             }
             None => Err(anyhow::anyhow!(

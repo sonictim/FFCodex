@@ -492,6 +492,18 @@ impl Codec for WavCodec {
 
             // Parse different chunk types
             match &chunk_id.to_le_bytes() {
+                b"fmt " => {
+                    // Parse fmt chunk to extract audio format information
+                    if chunk_data.len() >= 16 {
+                        let mut fmt_cursor = Cursor::new(chunk_data);
+                        metadata.format_tag = fmt_cursor.read_u16::<LittleEndian>()?;
+                        metadata.channels = fmt_cursor.read_u16::<LittleEndian>()?;
+                        metadata.sample_rate = fmt_cursor.read_u32::<LittleEndian>()?;
+                        fmt_cursor.read_u32::<LittleEndian>()?; // byte_rate - skip
+                        fmt_cursor.read_u16::<LittleEndian>()?; // block_align - skip
+                        metadata.bit_depth = fmt_cursor.read_u16::<LittleEndian>()?;
+                    }
+                }
                 b"bext" => {
                     metadata.parse_bext(chunk_data)?;
                 }
@@ -526,6 +538,7 @@ impl Codec for WavCodec {
     }
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+        
         // Read the existing file
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
@@ -534,6 +547,7 @@ impl Codec for WavCodec {
         let new_data = self.embed_metadata_from_hashmap(&mapped_file, metadata)?;
 
         // Write the data back to the file
+        let _data_len = new_data.len();
         std::fs::write(file_path, new_data)?;
         Ok(())
     }
@@ -543,8 +557,18 @@ impl WavCodec {
     fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
         let mut output = Cursor::new(Vec::new());
 
-        // Extract audio data and get format info
-        let (audio_info, data_chunk) = self.extract_audio_data(input)?;
+        // Extract audio data using the metadata's audio format information
+        let data_chunk = self.extract_audio_data_only(input)?;
+        
+        // Create AudioInfo from metadata's format information
+        let audio_info = AudioInfo {
+            format_tag: metadata.format_tag,
+            channels: metadata.channels,
+            sample_rate: metadata.sample_rate,
+            byte_rate: metadata.sample_rate * metadata.channels as u32 * (metadata.bit_depth / 8) as u32,
+            block_align: metadata.channels * (metadata.bit_depth / 8),
+            bits_per_sample: metadata.bit_depth,
+        };
 
         // Start building the clean WAV file
         // Write RIFF header (will update size later)
@@ -599,7 +623,7 @@ impl WavCodec {
             let chunk_start = cursor.position();
 
             match &chunk_id {
-                FMT_CHUNK_ID => {
+                b"fmt " => {
                     // Parse fmt chunk to get audio format info
                     let format_tag = cursor.read_u16::<LittleEndian>()?;
                     let channels = cursor.read_u16::<LittleEndian>()?;
@@ -617,7 +641,7 @@ impl WavCodec {
                         bits_per_sample,
                     });
                 }
-                DATA_CHUNK_ID => {
+                b"data" => {
                     let mut chunk_data = vec![0u8; chunk_size as usize];
                     cursor.read_exact(&mut chunk_data)?;
                     data_chunk = Some(chunk_data);
@@ -640,16 +664,71 @@ impl WavCodec {
         Ok((audio_info, data_chunk))
     }
 
+    fn extract_audio_data_only(&self, input: &[u8]) -> R<Vec<u8>> {
+        let mut cursor = Cursor::new(input);
+
+        // Skip RIFF header
+        cursor.seek(SeekFrom::Start(12))?;
+
+        let mut data_chunk = None;
+
+        while cursor.position() < input.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<LittleEndian>()?;
+            let chunk_start = cursor.position();
+
+            // Ensure we don't read past the end of the input
+            if chunk_start as usize + chunk_size as usize > input.len() {
+                break;
+            }
+
+            match &chunk_id {
+                b"data" => {
+                    let mut chunk_data = vec![0u8; chunk_size as usize];
+                    cursor.read_exact(&mut chunk_data)?;
+                    data_chunk = Some(chunk_data);
+                    break; // Found data chunk, no need to continue
+                }
+                _ => {
+                    // Skip all other chunks - don't read the data, just advance cursor
+                    cursor.set_position(chunk_start + chunk_size as u64);
+                    if chunk_size % 2 == 1 {
+                        cursor.set_position(cursor.position() + 1);
+                    }
+                }
+            }
+        }
+
+        let data_chunk = data_chunk.ok_or_else(|| anyhow!("No data chunk found"))?;
+
+        Ok(data_chunk)
+    }
+
     fn write_fmt_chunk(&self, output: &mut Cursor<Vec<u8>>, audio_info: &AudioInfo) -> R<()> {
         output.write_all(b"fmt ")?;
         output.write_u32::<LittleEndian>(16)?; // Standard PCM fmt chunk size
 
-        // Write format data
-        output.write_u16::<LittleEndian>(audio_info.format_tag)?;
+        // Always write a clean, standard PCM format chunk
+        let format_tag = if audio_info.format_tag == FORMAT_IEEE_FLOAT {
+            FORMAT_IEEE_FLOAT
+        } else {
+            FORMAT_PCM
+        };
+
+        // Recalculate byte_rate and block_align to ensure they're correct
+        let bytes_per_sample = audio_info.bits_per_sample / 8;
+        let block_align = audio_info.channels * bytes_per_sample;
+        let byte_rate = audio_info.sample_rate * block_align as u32;
+
+        output.write_u16::<LittleEndian>(format_tag)?;
         output.write_u16::<LittleEndian>(audio_info.channels)?;
         output.write_u32::<LittleEndian>(audio_info.sample_rate)?;
-        output.write_u32::<LittleEndian>(audio_info.byte_rate)?;
-        output.write_u16::<LittleEndian>(audio_info.block_align)?;
+        output.write_u32::<LittleEndian>(byte_rate)?;
+        output.write_u16::<LittleEndian>(block_align)?;
         output.write_u16::<LittleEndian>(audio_info.bits_per_sample)?;
 
         Ok(())
@@ -660,7 +739,8 @@ impl WavCodec {
 
         // Description (256 bytes) - try multiple field names
         if let Some(description) = metadata
-            .get_field("BEXT_BWF_DESCRIPTION")
+            .get_field("DESCRIPTION")
+            .or_else(|| metadata.get_field("BEXT_BWF_DESCRIPTION"))
             .or_else(|| metadata.get_field("Description"))
         {
             let bytes = description.as_bytes();
@@ -670,7 +750,8 @@ impl WavCodec {
 
         // Originator (32 bytes) - try multiple field names
         if let Some(originator) = metadata
-            .get_field("BEXT_BWF_ORIGINATOR")
+            .get_field("USER_DESIGNER")
+            .or_else(|| metadata.get_field("BEXT_BWF_ORIGINATOR"))
             .or_else(|| metadata.get_field("Originator"))
         {
             let bytes = originator.as_bytes();
@@ -755,21 +836,102 @@ impl WavCodec {
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.push_str("<BWFXML>\n");
         xml.push_str("  <IXML_VERSION>1.61</IXML_VERSION>\n");
-        xml.push_str("  <BWF_METADATA>\n");
-
-        // Add all metadata fields to iXML
-        for (key, value) in metadata.get_all_fields() {
-            if !key.is_empty() && !value.is_empty() {
-                let escaped_key = self.xml_escape(key);
-                let escaped_value = self.xml_escape(value);
-                xml.push_str(&format!(
-                    "    <{}>{}</{}>\n",
-                    escaped_key, escaped_value, escaped_key
-                ));
+        
+        // BEXT section for BWF metadata
+        xml.push_str("  <BEXT>\n");
+        if let Some(description) = metadata.get_field("DESCRIPTION").or_else(|| metadata.get_field("Description")) {
+            let escaped_value = self.xml_escape(&description);
+            xml.push_str(&format!("    <BWF_DESCRIPTION>{}</BWF_DESCRIPTION>\n", escaped_value));
+        }
+        if let Some(time_ref) = metadata.get_field("TimeReference") {
+            xml.push_str(&format!("    <BWF_TIME_REFERENCE_LOW>{}</BWF_TIME_REFERENCE_LOW>\n", time_ref));
+            xml.push_str("    <BWF_TIME_REFERENCE_HIGH>0</BWF_TIME_REFERENCE_HIGH>\n");
+        }
+        xml.push_str("  </BEXT>\n");
+        
+        // STEINBERG section for professional metadata
+        xml.push_str("  <STEINBERG>\n");
+        xml.push_str("    <ATTR_LIST>\n");
+        
+        // Map common professional metadata fields to Steinberg attributes
+        let steinberg_mappings = [
+            ("USER_LIBRARY", "MediaLibrary"),
+            ("USER_CATEGORY", "MediaCategoryPost"),
+            ("USER_MICROPHONE", "MediaRecordingMethod"),
+            ("DESCRIPTION", "MediaComment"),
+            ("USER_LOCATION", "MediaRecordingLocation"),
+            ("USER_MANUFACTURER", "MediaLibraryManufacturerName"),
+            ("USER_DESIGNER", "AudioSoundEditor"),
+            ("USER_TRACKTITLE", "SmfSongName"),
+            ("USER_KEYWORDS", "MusicalInstrument"),
+            ("USER_SUBCATEGORY", "MusicalCategory"),
+        ];
+        
+        for (metadata_key, steinberg_key) in &steinberg_mappings {
+            if let Some(value) = metadata.get_field(metadata_key) {
+                let escaped_value = self.xml_escape(&value);
+                xml.push_str("      <ATTR>\n");
+                xml.push_str(&format!("        <NAME>{}</NAME>\n", steinberg_key));
+                xml.push_str("        <TYPE>string</TYPE>\n");
+                xml.push_str(&format!("        <VALUE>{}</VALUE>\n", escaped_value));
+                xml.push_str("      </ATTR>\n");
             }
         }
-
-        xml.push_str("  </BWF_METADATA>\n");
+        
+        xml.push_str("    </ATTR_LIST>\n");
+        xml.push_str("  </STEINBERG>\n");
+        
+        // USER section for user-defined fields
+        xml.push_str("  <USER>\n");
+        for (key, value) in metadata.get_all_fields() {
+            if !key.is_empty() && !value.is_empty() {
+                // Skip fields that are already in BEXT or are internal fields
+                if !key.starts_with("BWFXML_") && !key.starts_with("BWF_") && 
+                   key != "TimeReference" && key != "OriginationTime" && key != "OriginationDate" &&
+                   key != "CodingHistory" && key != "OriginatorReference" && key != "Originator" {
+                    let escaped_key = self.xml_escape(key);
+                    let escaped_value = self.xml_escape(value);
+                    xml.push_str(&format!(
+                        "    <{}>{}</{}>\n",
+                        escaped_key, escaped_value, escaped_key
+                    ));
+                }
+            }
+        }
+        xml.push_str("  </USER>\n");
+        
+        // ASWG section for Audio Software Working Group metadata
+        xml.push_str("  <ASWG>\n");
+        if let Some(originator) = metadata.get_field("USER_DESIGNER") {
+            let escaped_value = self.xml_escape(&originator);
+            xml.push_str(&format!("    <originator>{}</originator>\n", escaped_value));
+        }
+        if let Some(subcategory) = metadata.get_field("USER_SUBCATEGORY") {
+            let escaped_value = self.xml_escape(&subcategory);
+            xml.push_str(&format!("    <subCategory>{}</subCategory>\n", escaped_value));
+        }
+        if let Some(library) = metadata.get_field("USER_LIBRARY") {
+            let escaped_value = self.xml_escape(&library);
+            xml.push_str(&format!("    <library>{}</library>\n", escaped_value));
+        }
+        if let Some(category) = metadata.get_field("USER_CATEGORY") {
+            let escaped_value = self.xml_escape(&category);
+            xml.push_str(&format!("    <category>{}</category>\n", escaped_value));
+        }
+        if let Some(song_title) = metadata.get_field("USER_TRACKTITLE") {
+            let escaped_value = self.xml_escape(&song_title);
+            xml.push_str(&format!("    <songTitle>{}</songTitle>\n", escaped_value));
+        }
+        if let Some(cat_id) = metadata.get_field("USER_CATID") {
+            let escaped_value = self.xml_escape(&cat_id);
+            xml.push_str(&format!("    <catId>{}</catId>\n", escaped_value));
+        }
+        if let Some(mic_type) = metadata.get_field("USER_MICROPHONE") {
+            let escaped_value = self.xml_escape(&mic_type);
+            xml.push_str(&format!("    <micType>{}</micType>\n", escaped_value));
+        }
+        xml.push_str("  </ASWG>\n");
+        
         xml.push_str("</BWFXML>\n");
         Ok(xml)
     }

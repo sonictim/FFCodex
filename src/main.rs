@@ -21,7 +21,7 @@ fn main() -> R<()> {
     // };
 
     // let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/Cloth-Blanket-Vinyl-Backing-Movement_GEN-HD2-28950MOD.flac";
-    let input_file = "/Users/tfarrell/Desktop/LONG TREX ROAR END OF JURASSIC PARK test.wav";
+    let input_file = "/Users/tfarrell/TEMP/SFX RECORD TEMP/240628_004.WAV";
 
     // clean_multi_mono(input_file)?;
 
@@ -44,24 +44,69 @@ fn main() -> R<()> {
 
     let start_time = std::time::Instant::now();
 
-    let mut c = Codex::new(input_file)?.extract_metadata()?;
+    let mut c = Codex::new(input_file)?.decode()?.extract_metadata()?;
 
     c.print_metadata();
 
-    println!("BEFORE: USER_DESIGNER = {:?}", c.get_metadata_field("USER_DESIGNER"));
-    c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
-    c.set_metadata_field("DESCRIPTION", "Two junkings together")?;
-    println!("AFTER SET: USER_DESIGNER = {:?}", c.get_metadata_field("USER_DESIGNER"));
+    println!(
+        "BEFORE: USER_DESIGNER = {:?}",
+        c.get_metadata_field("USER_DESIGNER")
+    );
     
+    // Test professional metadata workflow
+    c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
+    c.set_metadata_field("DESCRIPTION", "Metal friction sound effects")?;
+    c.set_metadata_field("USER_CATEGORY", "METAL")?;
+    c.set_metadata_field("USER_SUBCATEGORY", "FRICTION")?;
+    c.set_metadata_field("USER_LIBRARY", "TJF Recordings")?;
+    c.set_metadata_field("USER_TRACKTITLE", "240628_001")?;
+    c.set_metadata_field("USER_MICROPHONE", "Sony PCM-D100")?;
+    c.set_metadata_field("USER_CATID", "METLFric")?;
+    c.set_metadata_field("USER_LOCATION", "Frisco, TX")?;
+    c.set_metadata_field("USER_KEYWORDS", "metal friction squeaks")?;
+    
+    println!(
+        "AFTER SET: USER_DESIGNER = {:?}",
+        c.get_metadata_field("USER_DESIGNER")
+    );
+    println!(
+        "AFTER SET: ASWG_originator = {:?}",
+        c.get_metadata_field("ASWG_originator")
+    );
+    println!(
+        "AFTER SET: USER_CATEGORYFULL = {:?}",
+        c.get_metadata_field("USER_CATEGORYFULL")
+    );
+
     // c.convert_dual_mono()?;
+    println!("Embedding metadata to output file...");
     c.embed_metadata(output_file)?;
+    println!("First embedding complete!");
     // clean_multi_mono(input_file)?;
 
+    println!("Reading output file back...");
     let c2 = Codex::new(output_file)?.extract_metadata()?;
+    println!("Successfully read output file back!");
 
-    println!("AFTER EMBED: USER_DESIGNER = {:?}", c2.get_metadata_field("USER_DESIGNER"));
-    println!("AFTER EMBED: DESCRIPTION = {:?}", c2.get_metadata_field("DESCRIPTION"));
+    println!(
+        "AFTER EMBED: USER_DESIGNER = {:?}",
+        c2.get_metadata_field("USER_DESIGNER")
+    );
+    println!(
+        "AFTER EMBED: DESCRIPTION = {:?}",
+        c2.get_metadata_field("DESCRIPTION")
+    );
+    println!(
+        "AFTER EMBED: ASWG_originator = {:?}",
+        c2.get_metadata_field("ASWG_originator")
+    );
+    println!(
+        "AFTER EMBED: USER_CATEGORYFULL = {:?}",
+        c2.get_metadata_field("USER_CATEGORYFULL")
+    );
+    println!("Re-embedding metadata to output file...");
     c2.embed_metadata(output_file)?;
+    println!("Second embedding complete!");
 
     let elapsed_time = start_time.elapsed();
     println!("Finished in {} seconds", elapsed_time.as_secs_f32());

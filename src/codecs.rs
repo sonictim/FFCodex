@@ -127,6 +127,11 @@ impl SampleFormat {
 pub struct Metadata {
     map: std::collections::HashMap<String, String>, // Key-value pairs for metadata fields
     images: Vec<ImageChunk>,                        // Associated images (album art, etc.)
+    // Audio format information needed for fmt chunk reconstruction
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub bit_depth: u16,
+    pub format_tag: u16,
 }
 
 impl Metadata {
@@ -134,12 +139,109 @@ impl Metadata {
         Metadata {
             map: std::collections::HashMap::new(),
             images: Vec::new(),
+            sample_rate: 0,
+            channels: 0,
+            bit_depth: 0,
+            format_tag: 1, // Default to PCM
         }
     }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
         self.map.insert(key.to_string(), value.to_string());
+        
+        // Handle field mappings for professional metadata workflow
+        self.apply_field_mappings(key, value);
+        
         Ok(())
+    }
+    
+    /// Apply field mappings to ensure metadata appears in multiple locations
+    fn apply_field_mappings(&mut self, key: &str, value: &str) {
+        match key {
+            // Description field mapping - appears in multiple places
+            "DESCRIPTION" => {
+                self.map.insert("Description".to_string(), value.to_string());
+                self.map.insert("USER_DESCRIPTION".to_string(), value.to_string());
+                self.map.insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
+                self.map.insert("Comment".to_string(), value.to_string());
+            }
+            "Description" => {
+                self.map.insert("DESCRIPTION".to_string(), value.to_string());
+                self.map.insert("USER_DESCRIPTION".to_string(), value.to_string());
+                self.map.insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
+            }
+            
+            // Designer/Originator field mapping
+            "USER_DESIGNER" => {
+                self.map.insert("Originator".to_string(), value.to_string());
+                self.map.insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
+                self.map.insert("ASWG_originator".to_string(), value.to_string());
+            }
+            "Originator" => {
+                self.map.insert("USER_DESIGNER".to_string(), value.to_string());
+                self.map.insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
+            }
+            
+            // Category field mapping
+            "USER_CATEGORY" => {
+                self.map.insert("Genre".to_string(), value.to_string());
+                self.map.insert("ASWG_category".to_string(), value.to_string());
+            }
+            "Genre" => {
+                self.map.insert("USER_CATEGORY".to_string(), value.to_string());
+                self.map.insert("ASWG_category".to_string(), value.to_string());
+            }
+            
+            // Subcategory field mapping
+            "USER_SUBCATEGORY" => {
+                self.map.insert("ASWG_subCategory".to_string(), value.to_string());
+            }
+            
+            // Library field mapping
+            "USER_LIBRARY" => {
+                self.map.insert("AlbumArtist".to_string(), value.to_string());
+                self.map.insert("ASWG_library".to_string(), value.to_string());
+            }
+            "AlbumArtist" => {
+                self.map.insert("USER_LIBRARY".to_string(), value.to_string());
+                self.map.insert("ASWG_library".to_string(), value.to_string());
+            }
+            
+            // Track title field mapping
+            "USER_TRACKTITLE" => {
+                self.map.insert("Title".to_string(), value.to_string());
+                self.map.insert("ASWG_songTitle".to_string(), value.to_string());
+            }
+            "Title" => {
+                self.map.insert("USER_TRACKTITLE".to_string(), value.to_string());
+                self.map.insert("ASWG_songTitle".to_string(), value.to_string());
+            }
+            
+            // Microphone field mapping
+            "USER_MICROPHONE" => {
+                self.map.insert("ASWG_micType".to_string(), value.to_string());
+            }
+            
+            // Category ID field mapping
+            "USER_CATID" => {
+                self.map.insert("ASWG_catId".to_string(), value.to_string());
+            }
+            
+            // Keywords field mapping
+            "USER_KEYWORDS" => {
+                // Keywords often appear in multiple places in professional metadata
+            }
+            
+            _ => {} // No mapping for other fields
+        }
+        
+        // Generate category full from category and subcategory (after processing the main field)
+        if key == "USER_CATEGORY" || key == "USER_SUBCATEGORY" {
+            if let (Some(category), Some(subcategory)) = (self.map.get("USER_CATEGORY"), self.map.get("USER_SUBCATEGORY")) {
+                let category_full = format!("{}-{}", category, subcategory);
+                self.map.insert("USER_CATEGORYFULL".to_string(), category_full);
+            }
+        }
     }
 
     pub fn get_field(&self, key: &str) -> Option<String> {
@@ -326,12 +428,14 @@ impl Metadata {
         // Description: 256 bytes, null-terminated string
         if let Some(description) = clean_text_field(&data[0..256]) {
             self.set_field("Description", &description)?;
+            self.set_field("DESCRIPTION", &description)?;
         }
 
         // Originator: 32 bytes, null-terminated string
         if data.len() >= 288 {
             if let Some(originator) = clean_text_field(&data[256..288]) {
                 self.set_field("Originator", &originator)?;
+                self.set_field("USER_DESIGNER", &originator)?;
             }
         }
 
