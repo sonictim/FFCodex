@@ -3,6 +3,7 @@ use crate::prelude::*;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::OnceLock;
+use wide::f32x4;
 
 /// Sinc function: sin(πx) / (πx)
 fn sinc(x: f32) -> f32 {

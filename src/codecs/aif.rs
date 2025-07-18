@@ -23,6 +23,10 @@ const MIN_VALID_FILE_SIZE: usize = 12;
 pub struct AifCodec;
 
 impl Codec for AifCodec {
+    fn as_str(&self) -> &'static str {
+        "AIFF"
+    }
+
     fn file_extension(&self) -> &'static str {
         "aif"
     }
@@ -578,7 +582,7 @@ impl AifCodec {
         }
 
         // Write comprehensive metadata as iXML chunk (similar to WAV)
-        let ixml_content = self.create_ixml_from_metadata(metadata)?;
+        let ixml_content = self.create_ixml(metadata)?;
         self.write_aif_chunk(&mut output, IXML_CHUNK_ID, ixml_content.as_bytes())?;
 
         // Write image chunks
@@ -608,15 +612,6 @@ impl AifCodec {
             output.write_all(&[0])?; // padding
         }
         Ok(())
-    }
-
-    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
-        let mut xml = String::new();
-        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        xml.push_str("<AIFFXML>\n");
-        xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
-        xml.push_str("</AIFFXML>\n");
-        Ok(xml)
     }
 }
 
@@ -677,7 +672,7 @@ fn decode_samples(
 
     // Use parallel processing only for files with many channels or large sample counts
     let use_parallel = channels > 4 && samples_per_channel > 10_000;
-    
+
     let channel_processor = |ch: usize| {
         let mut channel_data = vec![0.0; samples_per_channel];
 
@@ -704,9 +699,9 @@ fn decode_samples(
                             input[sample_idx + 2],
                         ]);
                         if sample & 0x800000 != 0 {
-                            sample |= 0xFF000000;
+                            sample |= -0x01000000i32;
                         }
-                        sample as f32 / 8388608.0
+                        sample as u32 as f32 / 8388608.0
                     }
                     32 => {
                         let sample = i32::from_be_bytes([
@@ -726,7 +721,10 @@ fn decode_samples(
     };
 
     let output: Vec<Vec<f32>> = if use_parallel {
-        (0..channels as usize).into_par_iter().map(channel_processor).collect()
+        (0..channels as usize)
+            .into_par_iter()
+            .map(channel_processor)
+            .collect()
     } else {
         (0..channels as usize).map(channel_processor).collect()
     };
@@ -736,71 +734,7 @@ fn decode_samples(
 
 // IEEE 80-bit extended precision float parsing functions
 
-fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
-    let channels = buffer.channels as usize;
-    let frames = buffer.data[0].len();
-
-    for i in 0..frames {
-        for ch in 0..channels {
-                let pos = i * channels as usize + ch;
-                let sample_idx = pos * bytes_per_sample;
-
-                if sample_idx + bytes_per_sample - 1 < input.len() {
-                    let val = match bits_per_sample {
-                        8 => {
-                            // AIFF 8-bit samples are signed, unlike WAV which uses unsigned
-                            input[sample_idx] as i8 as f32 / 127.0
-                        }
-                        16 => {
-                            let val =
-                                i16::from_be_bytes([input[sample_idx], input[sample_idx + 1]]);
-                            val as f32 / I16_DIVISOR
-                        }
-                        24 => {
-                            // For AIFF (big-endian), the bytes are in big-endian order
-                            // MSB first: [MSB] [MID] [LSB]
-                            let val = ((input[sample_idx] as i32) << 16)
-                                | ((input[sample_idx + 1] as i32) << 8)
-                                | (input[sample_idx + 2] as i32);
-                            // Sign extend from 24-bit to 32-bit
-                            let val = if val & I24_SIGN_BIT != 0 {
-                                val | I24_SIGN_EXTENSION_MASK
-                            } else {
-                                val
-                            };
-                            val as f32 / I24_DIVISOR
-                        }
-                        32 => {
-                            if is_float_format {
-                                let bytes = [
-                                    input[sample_idx],
-                                    input[sample_idx + 1],
-                                    input[sample_idx + 2],
-                                    input[sample_idx + 3],
-                                ];
-                                f32::from_be_bytes(bytes)
-                            } else {
-                                let val = i32::from_be_bytes([
-                                    input[sample_idx],
-                                    input[sample_idx + 1],
-                                    input[sample_idx + 2],
-                                    input[sample_idx + 3],
-                                ]);
-                                val as f32 / I32_DIVISOR
-                            }
-                        }
-                        _ => return vec![],
-                    };
-                    channel_data[i] = val;
-                }
-            }
-
-            channel_data
-        })
-        .collect();
-
-    Ok(output)
-}
+// ...existing code...
 
 fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
     let channels = buffer.channels as usize;

@@ -1,4 +1,4 @@
-use crate::chromaprint_bindings::{CHROMAPRINT_ALGORITHM_DEFAULT, Chromaprint};
+use crate::bindings::chromaprint_bindings::{CHROMAPRINT_ALGORITHM_DEFAULT, Chromaprint};
 use crate::prelude::*;
 use base64::{Engine as _, engine::general_purpose};
 

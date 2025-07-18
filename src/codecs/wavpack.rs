@@ -6,8 +6,8 @@
 //! - Comprehensive metadata handling
 //! - High-quality encoding and decoding
 
+use crate::bindings::wavpack_bindings::*;
 use crate::prelude::*;
-use crate::wavpack_bindings::*;
 use memmap2::MmapOptions;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
@@ -87,7 +87,6 @@ impl WavpackDecoder {
         let mode = unsafe { WavpackGetMode(self.context) };
         (mode & MODE_FLOAT) != 0
     }
-
 
     /// Decode all samples into an AudioBuffer
     pub fn decode(&mut self) -> R<AudioBuffer> {
@@ -198,28 +197,6 @@ impl WavpackDecoder {
 
         Ok(())
     }
-
-
-    /// Detect MIME type from image data
-    fn detect_image_mime_type(data: &[u8]) -> String {
-        if data.len() < 8 {
-            return "application/octet-stream".to_string();
-        }
-
-        if data.starts_with(b"\xFF\xD8\xFF") {
-            "image/jpeg".to_string()
-        } else if data.starts_with(b"\x89PNG\r\n\x1A\n") {
-            "image/png".to_string()
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            "image/gif".to_string()
-        } else if data.starts_with(b"RIFF") && data[8..12] == *b"WEBP" {
-            "image/webp".to_string()
-        } else if data.starts_with(b"\x00\x00\x01\x00") {
-            "image/x-icon".to_string()
-        } else {
-            "application/octet-stream".to_string()
-        }
-    }
 }
 
 impl Drop for WavpackDecoder {
@@ -305,17 +282,17 @@ impl WavpackEncoder {
             encoder.output_buffer.extend_from_slice(slice);
 
             if current_len == 0 {
-                dprintln!("WavPack output_callback: First write of {} bytes", bcount);
+                // dprintln!("WavPack output_callback: First write of {} bytes", bcount);
                 // Check if this looks like a header (WavPack files start with "wvpk")
                 if bcount >= 4 && slice[0..4] == *b"wvpk" {
-                    dprintln!("WavPack output_callback: Writing WavPack header block");
+                    // dprintln!("WavPack output_callback: Writing WavPack header block");
                 }
             } else if bcount > 1000 {
-                dprintln!(
-                    "WavPack output_callback: Large write of {} bytes (total: {})",
-                    bcount,
-                    encoder.output_buffer.len()
-                );
+                // dprintln!(
+                //     "WavPack output_callback: Large write of {} bytes (total: {})",
+                //     bcount,
+                //     encoder.output_buffer.len()
+                // );
             }
 
             bcount
@@ -345,7 +322,6 @@ impl WavpackEncoder {
 
         Ok(())
     }
-
 
     /// Encode an AudioBuffer to WavPack format
     pub fn encode(
@@ -498,6 +474,9 @@ impl Drop for WavpackEncoder {
 pub struct WvCodec;
 
 impl Codec for WvCodec {
+    fn as_str(&self) -> &'static str {
+        "WAVPACK"
+    }
     fn file_extension(&self) -> &'static str {
         "wv"
     }
@@ -632,14 +611,14 @@ impl Codec for WvCodec {
         encoder.encode(buffer, total_samples, &None)
     }
 
-
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
         let mut metadata = Metadata::new();
         let decoder = WavpackDecoder::new(input)?;
 
         // Extract text tags
         let num_tags = unsafe { WavpackGetNumTagItems(decoder.context) };
-        
+        dprintln!("WavPack parse_metadata: Found {} text tags", num_tags);
+
         for i in 0..num_tags {
             let mut item_buffer = vec![0u8; 256];
             let result = unsafe {
@@ -677,6 +656,11 @@ impl Codec for WvCodec {
                         .unwrap_or(value_buffer.len());
                     let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
                     if !item_name.is_empty() && !value.is_empty() {
+                        dprintln!(
+                            "WavPack parse_metadata: Found tag '{}' = '{}'",
+                            item_name,
+                            value
+                        );
                         // Special handling for iXML content
                         if item_name.to_uppercase() == "IXML" {
                             metadata.parse_ixml(&value)?;
@@ -692,7 +676,11 @@ impl Codec for WvCodec {
 
         // Extract binary tags (like album art)
         let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(decoder.context) };
-        
+        dprintln!(
+            "WavPack parse_metadata: Found {} binary tags",
+            num_binary_tags
+        );
+
         for i in 0..num_binary_tags {
             let mut item_buffer = vec![0u8; 256];
             let result = unsafe {
@@ -731,7 +719,7 @@ impl Codec for WvCodec {
                         || item_name.to_lowercase().contains("picture")
                         || item_name.to_lowercase().contains("apic")
                     {
-                        let mime_type = Self::detect_image_mime_type(&data_buffer);
+                        let mime_type = detect_image_mime_type(&data_buffer);
                         let image = ImageChunk {
                             mime_type,
                             description: item_name,
@@ -762,10 +750,10 @@ impl Codec for WvCodec {
         // For WavPack, we need to decode, add metadata, and re-encode
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        
+
         // First, decode the WavPack file to get the audio data
         let audio_buffer = self.decode(&mapped_file)?;
-        
+
         // Create a new encoder with the same parameters
         let sample_rate = audio_buffer.sample_rate;
         let channels = audio_buffer.channels;
@@ -779,18 +767,27 @@ impl Codec for WvCodec {
         let is_float = audio_buffer.format == SampleFormat::F32;
         let lossless = true;
         let total_samples = audio_buffer.data[0].len() as u64;
-        
+
         let mut encoder =
             WavpackEncoder::new(sample_rate, channels, bits_per_sample, is_float, lossless)?;
-        
+
         encoder.init()?;
-        
+
         // Add metadata to the encoder context before encoding
         self.add_metadata_to_encoder(&mut encoder, metadata)?;
-        
+
+        // Verify metadata was added to context
+        let text_tags = unsafe { WavpackGetNumTagItems(encoder.context) };
+        let binary_tags = unsafe { WavpackGetNumBinaryTagItems(encoder.context) };
+        dprintln!(
+            "WavPack embed_metadata_to_file: After adding metadata - context has {} text tags and {} binary tags",
+            text_tags,
+            binary_tags
+        );
+
         // Encode with the metadata
         let result = encoder.encode(&audio_buffer, total_samples, &Some(metadata))?;
-        
+
         // Write the result back to the file
         std::fs::write(file_path, result)?;
         Ok(())
@@ -807,10 +804,10 @@ impl WvCodec {
         // Add text fields from the hashmap
         for (key, value) in metadata.get_all_fields().iter() {
             let wavpack_key = self.map_to_wavpack_key(key);
-            let c_key = CString::new(wavpack_key.as_str())
-                .map_err(|_| anyhow!("Invalid metadata key"))?;
-            let c_value = CString::new(value.as_str())
-                .map_err(|_| anyhow!("Invalid metadata value"))?;
+            let c_key =
+                CString::new(wavpack_key.as_str()).map_err(|_| anyhow!("Invalid metadata key"))?;
+            let c_value =
+                CString::new(value.as_str()).map_err(|_| anyhow!("Invalid metadata value"))?;
 
             let result = unsafe {
                 WavpackAppendTagItem(
@@ -820,17 +817,26 @@ impl WvCodec {
                     value.len() as c_int,
                 )
             };
-            
+
             if result != 1 {
-                dprintln!("Warning: Failed to add text tag '{}'", key);
+                dprintln!(
+                    "Warning: Failed to add text tag '{}' - result: {}",
+                    key,
+                    result
+                );
+            } else {
+                dprintln!(
+                    "Successfully added text tag '{}' with value '{}'",
+                    key,
+                    value
+                );
             }
         }
 
         // Create and add iXML from all metadata fields
         if !metadata.get_all_fields().is_empty() {
-            let ixml_content = self.create_ixml_from_metadata(metadata)?;
-            let c_key = CString::new("iXML")
-                .map_err(|_| anyhow!("Invalid metadata key"))?;
+            let ixml_content = self.create_ixml(metadata)?;
+            let c_key = CString::new("iXML").map_err(|_| anyhow!("Invalid metadata key"))?;
             let c_value = CString::new(ixml_content.as_str())
                 .map_err(|_| anyhow!("Invalid metadata value"))?;
 
@@ -842,9 +848,11 @@ impl WvCodec {
                     ixml_content.len() as c_int,
                 )
             };
-            
+
             if result != 1 {
-                dprintln!("Warning: Failed to add iXML tag");
+                dprintln!("Warning: Failed to add iXML tag - result: {}", result);
+            } else {
+                dprintln!("Successfully added iXML tag");
             }
         }
 
@@ -858,8 +866,7 @@ impl WvCodec {
                 "Picture"
             };
 
-            let c_item = CString::new(item_name)
-                .map_err(|_| anyhow!("Invalid item name"))?;
+            let c_item = CString::new(item_name).map_err(|_| anyhow!("Invalid item name"))?;
 
             let result = unsafe {
                 WavpackAppendBinaryTagItem(
@@ -869,9 +876,15 @@ impl WvCodec {
                     image.data().len() as c_int,
                 )
             };
-            
+
             if result != 1 {
-                dprintln!("Warning: Failed to add picture '{}'", image.description());
+                dprintln!(
+                    "Warning: Failed to add picture '{}' - result: {}",
+                    image.description(),
+                    result
+                );
+            } else {
+                dprintln!("Successfully added picture '{}'", image.description());
             }
         }
 
@@ -901,8 +914,11 @@ impl WvCodec {
             "PERFORMER" => "Performer".to_string(),
             _ => {
                 // Preserve WAV-specific prefixed fields for cross-format compatibility
-                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
-                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                if key.starts_with("USER_")
+                    || key.starts_with("BEXT_")
+                    || key.starts_with("ASWG_")
+                    || key.starts_with("STEINBERG_")
+                {
                     key.to_string()
                 } else {
                     key.to_string()
@@ -935,23 +951,16 @@ impl WvCodec {
             // For any other keys, use uppercase (WavPack convention)
             // But preserve WAV-specific prefixed fields for cross-format compatibility
             _ => {
-                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
-                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                if key.starts_with("USER_")
+                    || key.starts_with("BEXT_")
+                    || key.starts_with("ASWG_")
+                    || key.starts_with("STEINBERG_")
+                {
                     key.to_string()
                 } else {
                     key.to_uppercase()
                 }
             }
         }
-    }
-
-    /// Create iXML from all metadata fields
-    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
-        let mut xml = String::new();
-        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        xml.push_str("<WAVPACKXML>\n");
-        xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
-        xml.push_str("</WAVPACKXML>\n");
-        Ok(xml)
     }
 }

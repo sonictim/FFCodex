@@ -47,6 +47,10 @@ struct AudioInfo {
 }
 
 impl Codec for WavCodec {
+    fn as_str(&self) -> &'static str {
+        "WAV"
+    }
+
     fn file_extension(&self) -> &'static str {
         "wav"
     }
@@ -64,7 +68,6 @@ impl Codec for WavCodec {
         Ok(())
     }
     fn get_file_info(&self, file_path: &str) -> R<FileInfo> {
-        use byteorder::{LittleEndian, ReadBytesExt};
         use std::fs::metadata;
         use std::io::{Cursor, Read, Seek, SeekFrom};
 
@@ -806,7 +809,7 @@ impl WavCodec {
     }
 
     fn write_ixml_chunk(&self, output: &mut Cursor<Vec<u8>>, metadata: &Metadata) -> R<()> {
-        let ixml_content = self.create_ixml_from_metadata(metadata)?;
+        let ixml_content = self.create_ixml(metadata)?;
         if !ixml_content.trim().is_empty() {
             let ixml_bytes = ixml_content.as_bytes();
             output.write_all(b"iXML")?;
@@ -830,23 +833,6 @@ impl WavCodec {
             }
         }
         Ok(())
-    }
-
-    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
-        let mut xml = String::new();
-        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        xml.push_str("<BWFXML>\n");
-        xml.push_str(&ixml::create_ixml_from_metadata(metadata)?);
-        xml.push_str("</BWFXML>\n");
-        Ok(xml)
-    }
-
-    pub fn xml_escape(&self, text: &str) -> String {
-        text.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;")
-            .replace('\'', "&apos;")
     }
 }
 
@@ -881,7 +867,7 @@ fn decode_samples(
 
     // Use parallel processing only for files with many channels or large frame counts
     let use_parallel = channels > 4 && frame_count > 10_000;
-    
+
     let channel_processor = |ch: usize| {
         let mut channel_data = Vec::with_capacity(frame_count);
 
@@ -902,7 +888,8 @@ fn decode_samples(
                     (sample - U8_OFFSET) / U8_SCALE
                 }
                 16 => {
-                    let sample = i16::from_le_bytes([input[sample_idx], input[sample_idx + 1]]) as f32;
+                    let sample =
+                        i16::from_le_bytes([input[sample_idx], input[sample_idx + 1]]) as f32;
                     sample * I16_DIVISOR_RECIP
                 }
                 24 => {
@@ -935,7 +922,10 @@ fn decode_samples(
     };
 
     let output: Vec<Vec<f32>> = if use_parallel {
-        (0..channels as usize).into_par_iter().map(channel_processor).collect()
+        (0..channels as usize)
+            .into_par_iter()
+            .map(channel_processor)
+            .collect()
     } else {
         (0..channels as usize).map(channel_processor).collect()
     };
@@ -943,68 +933,7 @@ fn decode_samples(
     Ok(output)
 }
 
-fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
-
-            // For each frame
-            for frame in 0..frame_count {
-                // Calculate the byte index of this sample
-                // This is the formula that properly handles interleaved audio of any channel count
-                let sample_idx = (frame * channels as usize + ch) * bytes_per_sample;
-
-                // Check bounds to prevent buffer overruns
-                if sample_idx + bytes_per_sample > input.len() {
-                    break;
-                }
-
-                // Convert the bytes to a float sample
-                let val = match bits_per_sample {
-                    BIT_DEPTH_8 => input[sample_idx] as f32 / U8_SCALE - 1.0,
-                    BIT_DEPTH_16 => {
-                        let val = i16::from_le_bytes([input[sample_idx], input[sample_idx + 1]]);
-                        val as f32 / I16_DIVISOR
-                    }
-                    BIT_DEPTH_24 => {
-                        let val = ((input[sample_idx + 2] as i32) << 16)
-                            | ((input[sample_idx + 1] as i32) << 8)
-                            | (input[sample_idx] as i32);
-                        let val = if val & I24_SIGN_BIT != 0 {
-                            val | I24_SIGN_EXTENSION_MASK
-                        } else {
-                            val
-                        };
-                        val as f32 / I24_DIVISOR
-                    }
-                    BIT_DEPTH_32 => {
-                        if is_float_format {
-                            let bytes = [
-                                input[sample_idx],
-                                input[sample_idx + 1],
-                                input[sample_idx + 2],
-                                input[sample_idx + 3],
-                            ];
-                            f32::from_le_bytes(bytes)
-                        } else {
-                            let val = i32::from_le_bytes([
-                                input[sample_idx],
-                                input[sample_idx + 1],
-                                input[sample_idx + 2],
-                                input[sample_idx + 3],
-                            ]);
-                            val as f32 / I32_DIVISOR
-                        }
-                    }
-                    _ => 0.0, // Should never reach here due to earlier check
-                };
-
-                channel_data.push(val);
-            }
-
-            channel_data
-        })
-        .collect();
-
-    Ok(output)
-}
+// ...existing code...
 
 fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
     // Ensure channel count doesn't exceed available data channels

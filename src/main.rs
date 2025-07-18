@@ -3,12 +3,12 @@ use ffcodex_lib::*;
 
 fn main() -> R<()> {
     // Use the directly exported get_version function
-    let version = chromaprint_bindings::get_version();
+    let version = bindings::chromaprint_bindings::get_version();
     let start_time = std::time::Instant::now();
     println!("Chromaprint version: {}", version);
 
     // Get input file from command line arguments
-    let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR copy.flac";
+    let input_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
 
     // clean_multi_mono(input_file)?;
 
@@ -25,7 +25,7 @@ fn main() -> R<()> {
         elapsed_time.as_secs_f32()
     );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
+    let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
 
     // // flac_debug(input_file)?;
 
@@ -72,6 +72,16 @@ fn main() -> R<()> {
     println!("Reading output file back...");
     let c2 = Codex::new(output_file)?.extract_metadata()?;
     println!("Successfully read output file back!");
+
+    // Debug: Print all metadata fields found
+    println!("All metadata fields in output file:");
+    if let Some(metadata) = &c2.metadata {
+        for (key, value) in metadata.get_all_fields() {
+            println!("  {} = {}", key, value);
+        }
+    } else {
+        println!("  No metadata found!");
+    }
 
     println!(
         "AFTER EMBED: USER_DESIGNER = {:?}",

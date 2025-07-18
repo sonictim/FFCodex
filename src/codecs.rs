@@ -124,7 +124,7 @@ impl SampleFormat {
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
     map: std::collections::HashMap<String, String>, // Key-value pairs for metadata fields
-    images: Vec<ImageChunk>,                         // Associated images (album art, etc.)
+    images: Vec<ImageChunk>,                        // Associated images (album art, etc.)
     // Audio format information needed for fmt chunk reconstruction
     pub sample_rate: u32,
     pub channels: u16,
@@ -149,7 +149,6 @@ impl Metadata {
         self.map.insert(key.to_string(), value.to_string());
         Ok(())
     }
-
 
     pub fn get_field(&self, key: &str) -> Option<String> {
         self.map.get(key).cloned()
@@ -468,5 +467,25 @@ impl ImageChunk {
 
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+pub fn detect_image_mime_type(data: &[u8]) -> String {
+    if data.len() < 8 {
+        return "application/octet-stream".to_string();
+    }
+
+    if data.starts_with(b"\xFF\xD8\xFF") {
+        "image/jpeg".to_string()
+    } else if data.starts_with(b"\x89PNG\r\n\x1A\n") {
+        "image/png".to_string()
+    } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        "image/gif".to_string()
+    } else if data.starts_with(b"RIFF") && data[8..12] == *b"WEBP" {
+        "image/webp".to_string()
+    } else if data.starts_with(b"\x00\x00\x01\x00") {
+        "image/x-icon".to_string()
+    } else {
+        "application/octet-stream".to_string()
     }
 }

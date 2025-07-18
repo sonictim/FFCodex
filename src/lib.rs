@@ -6,10 +6,9 @@ use std::path::PathBuf;
 use codecs::*;
 mod prelude;
 use crate::prelude::*;
+pub mod bindings;
 mod chromaprint;
-pub mod chromaprint_bindings;
 pub mod resample;
-pub mod wavpack_bindings;
 
 // Standard bit depths
 const BIT_DEPTH_8: u16 = 8;
@@ -326,6 +325,7 @@ impl Codex {
 }
 
 pub trait Codec: Send + Sync {
+    fn as_str(&self) -> &'static str;
     fn validate_file_format(&self, data: &[u8]) -> R<()>;
     fn file_extension(&self) -> &'static str;
     fn get_file_info(&self, file_path: &str) -> R<FileInfo>;
@@ -358,7 +358,7 @@ pub trait Codec: Send + Sync {
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
         let file = std::fs::File::open(file_path)?;
         let file_size = file.metadata()?.len();
-        
+
         // Use memory mapping only for files larger than 100MB
         if file_size > 100 * 1024 * 1024 {
             let mapped_file = unsafe { MmapOptions::new().map(&file)? };
@@ -370,6 +370,19 @@ pub trait Codec: Send + Sync {
             file.read_to_end(&mut data)?;
             self.parse_metadata(&data)
         }
+    }
+
+    fn create_ixml(&self, metadata: &Metadata) -> R<String> {
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push('<');
+        xml.push_str(self.as_str());
+        xml.push_str(">\n");
+        xml.push_str(&ixml::create_ixml_from_metadata(metadata)?);
+        xml.push_str("</");
+        xml.push_str(self.as_str());
+        xml.push_str(">\n");
+        Ok(xml)
     }
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata>;
