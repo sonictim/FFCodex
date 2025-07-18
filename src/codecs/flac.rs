@@ -458,6 +458,16 @@ impl Codec for FlacCodec {
                     }
                 }
             }
+
+            // Parse Application blocks for iXML
+            for block in tag.blocks() {
+                if let Block::Application(app_block) = block {
+                    if &app_block.id == b"iXML" {
+                        let ixml_str = String::from_utf8_lossy(&app_block.data);
+                        metadata.parse_ixml(&ixml_str)?;
+                    }
+                }
+            }
         }
 
         // Clean up temp file
@@ -685,6 +695,14 @@ impl Codec for FlacCodec {
             };
             dest_tag.push_block(Block::Picture(picture_block));
         }
+
+        // Add iXML as Application block (BWF chunk)
+        let ixml_content = self.create_ixml_from_metadata(metadata)?;
+        let ixml_block = metaflac::block::Application {
+            id: b"iXML".to_vec(),
+            data: ixml_content.as_bytes().to_vec(),
+        };
+        dest_tag.push_block(Block::Application(ixml_block));
 
         // Write the metadata back to the file
         dest_tag
@@ -997,38 +1015,40 @@ impl Codec for FlacCodec {
 impl FlacCodec {
     fn normalize_vorbis_key(&self, key: &str) -> String {
         match key.to_uppercase().as_str() {
-            "TITLE" => "Title",
-            "ARTIST" => "Artist",
-            "ALBUM" => "Album",
-            "DATE" => "Year",
-            "GENRE" => "Genre",
-            "TRACKNUMBER" => "Track",
-            "ALBUMARTIST" => "AlbumArtist",
-            "COMPOSER" => "Composer",
-            "CONDUCTOR" => "Conductor",
-            "COMMENT" => "Comment",
-            "DESCRIPTION" => "Description",
-            "DISCNUMBER" => "DiscNumber",
-            "ORGANIZATION" => "Publisher",
-            "CONTACT" => "Contact",
-            "COPYRIGHT" => "Copyright",
-            "ISRC" => "ISRC",
-            "ENCODER" => "EncodingSettings",
-            "LANGUAGE" => "Language",
-            "PERFORMER" => "Performer",
-            "VERSION" => "Version",
-            "LOCATION" => "Location",
+            "TITLE" => "Title".to_string(),
+            "ARTIST" => "Artist".to_string(),
+            "ALBUM" => "Album".to_string(),
+            "DATE" => "Year".to_string(),
+            "GENRE" => "Genre".to_string(),
+            "TRACKNUMBER" => "Track".to_string(),
+            "ALBUMARTIST" => "AlbumArtist".to_string(),
+            "COMPOSER" => "Composer".to_string(),
+            "CONDUCTOR" => "Conductor".to_string(),
+            "COMMENT" => "Comment".to_string(),
+            "DESCRIPTION" => "Description".to_string(),
+            "DISCNUMBER" => "DiscNumber".to_string(),
+            "ORGANIZATION" => "Publisher".to_string(),
+            "CONTACT" => "Contact".to_string(),
+            "COPYRIGHT" => "Copyright".to_string(),
+            "ISRC" => "ISRC".to_string(),
+            "ENCODER" => "EncodingSettings".to_string(),
+            "LANGUAGE" => "Language".to_string(),
+            "PERFORMER" => "Performer".to_string(),
+            "VERSION" => "Version".to_string(),
+            "LOCATION" => "Location".to_string(),
             _ => {
                 // Preserve WAV-specific prefixed fields for cross-format compatibility
-                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
-                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                if key.starts_with("USER_")
+                    || key.starts_with("BEXT_")
+                    || key.starts_with("ASWG_")
+                    || key.starts_with("STEINBERG_")
+                {
                     key.to_string()
                 } else {
                     key.to_string()
                 }
             }
         }
-        .to_string()
     }
     fn map_to_vorbis_key(&self, key: &str) -> String {
         // Map common metadata keys to standard Vorbis comment field names
@@ -1057,14 +1077,26 @@ impl FlacCodec {
             // For any other keys, convert to uppercase (Vorbis convention)
             // But preserve WAV-specific prefixed fields as-is for cross-format compatibility
             _ => {
-                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
-                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                if key.starts_with("USER_")
+                    || key.starts_with("BEXT_")
+                    || key.starts_with("ASWG_")
+                    || key.starts_with("STEINBERG_")
+                {
                     key.to_string()
                 } else {
                     key.to_uppercase()
                 }
             }
         }
+    }
+
+    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<BWFXML>\n");
+        xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
+        xml.push_str("</BWFXML>\n");
+        Ok(xml)
     }
 }
 

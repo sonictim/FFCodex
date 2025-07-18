@@ -21,7 +21,7 @@ fn main() -> R<()> {
     // };
 
     // let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/Cloth-Blanket-Vinyl-Backing-Movement_GEN-HD2-28950MOD.flac";
-    let input_file = "/Users/tfarrell/Desktop/RECORDINGS TO PROCESS/EXPORTS/GOREBone_BoneBreaksFromSnapPeas_TF_TJFR.wav";
+    let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR copy.flac";
 
     // clean_multi_mono(input_file)?;
 
@@ -38,7 +38,7 @@ fn main() -> R<()> {
         elapsed_time.as_secs_f32()
     );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
 
     // // flac_debug(input_file)?;
 
