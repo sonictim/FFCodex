@@ -22,10 +22,13 @@ const U8_OFFSET: f32 = 128.0;
 const U8_SCALE: f32 = 127.0;
 const I16_MAX_F: f32 = 32767.0;
 const I16_DIVISOR: f32 = 32768.0;
+const I16_DIVISOR_RECIP: f32 = 1.0 / 32768.0; // Pre-calculated reciprocal
 const I24_MAX_F: f32 = 8388607.0;
 const I24_DIVISOR: f32 = 8388608.0;
+const I24_DIVISOR_RECIP: f32 = 1.0 / 8388608.0; // Pre-calculated reciprocal
 const I32_MAX_F: f32 = 2147483647.0;
 const I32_DIVISOR: f32 = 2147483648.0;
+const I32_DIVISOR_RECIP: f32 = 1.0 / 2147483648.0; // Pre-calculated reciprocal
 
 //Bit Operations
 const I24_SIGN_BIT: i32 = 0x800000;
@@ -167,20 +170,7 @@ impl Codex {
             std::fs::write(file_path, encoded_data)?;
 
             // Update metadata with the audio format information from the buffer
-            let mut updated_metadata = metadata.clone();
-            updated_metadata.sample_rate = buffer.sample_rate;
-            updated_metadata.channels = buffer.channels;
-            updated_metadata.bit_depth = match buffer.format {
-                SampleFormat::U8 => 8,
-                SampleFormat::I16 => 16,
-                SampleFormat::I24 => 24,
-                SampleFormat::I32 => 32,
-                SampleFormat::F32 => 32,
-            };
-            updated_metadata.format_tag = match buffer.format {
-                SampleFormat::F32 => 3, // IEEE float
-                _ => 1,                 // PCM
-            };
+            let updated_metadata = self.update_metadata_from_buffer(metadata, buffer);
 
             // Then embed metadata to the newly created file
             output_codec.embed_metadata_to_file(file_path, &updated_metadata)?;
@@ -251,20 +241,7 @@ impl Codex {
                 // Embed metadata if available, updating it with current buffer info
                 if let Some(metadata) = &self.metadata {
                     if let Some(buffer) = &self.buffer {
-                        let mut updated_metadata = metadata.clone();
-                        updated_metadata.sample_rate = buffer.sample_rate;
-                        updated_metadata.channels = buffer.channels;
-                        updated_metadata.bit_depth = match buffer.format {
-                            SampleFormat::U8 => 8,
-                            SampleFormat::I16 => 16,
-                            SampleFormat::I24 => 24,
-                            SampleFormat::I32 => 32,
-                            SampleFormat::F32 => 32,
-                        };
-                        updated_metadata.format_tag = match buffer.format {
-                            SampleFormat::F32 => 3, // IEEE float
-                            _ => 1,                 // PCM
-                        };
+                        let updated_metadata = self.update_metadata_from_buffer(metadata, buffer);
                         codec.embed_metadata_to_file(temp_path, &updated_metadata)?;
                     } else {
                         codec.embed_metadata_to_file(temp_path, metadata)?;
@@ -328,12 +305,23 @@ impl Codex {
         })?;
         codec.get_file_info(self.path.to_str().unwrap())
     }
-    pub fn print_metadata(&self) {
-        if let Some(metadata) = &self.metadata {
-            metadata.print();
-        } else {
-            println!("No metadata available");
-        }
+
+    fn update_metadata_from_buffer(&self, metadata: &Metadata, buffer: &AudioBuffer) -> Metadata {
+        let mut updated_metadata = metadata.clone();
+        updated_metadata.sample_rate = buffer.sample_rate;
+        updated_metadata.channels = buffer.channels;
+        updated_metadata.bit_depth = match buffer.format {
+            SampleFormat::U8 => 8,
+            SampleFormat::I16 => 16,
+            SampleFormat::I24 => 24,
+            SampleFormat::I32 => 32,
+            SampleFormat::F32 => 32,
+        };
+        updated_metadata.format_tag = match buffer.format {
+            SampleFormat::F32 => 3, // IEEE float
+            _ => 1,                 // PCM
+        };
+        updated_metadata
     }
 }
 
@@ -369,8 +357,19 @@ pub trait Codec: Send + Sync {
 
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
         let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
-        self.parse_metadata(&mapped_file)
+        let file_size = file.metadata()?.len();
+        
+        // Use memory mapping only for files larger than 100MB
+        if file_size > 100 * 1024 * 1024 {
+            let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+            self.parse_metadata(&mapped_file)
+        } else {
+            use std::io::Read;
+            let mut data = Vec::with_capacity(file_size as usize);
+            let mut file = file;
+            file.read_to_end(&mut data)?;
+            self.parse_metadata(&data)
+        }
     }
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata>;

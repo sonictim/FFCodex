@@ -88,12 +88,6 @@ impl WavpackDecoder {
         (mode & MODE_FLOAT) != 0
     }
 
-    /// Check if the stream is lossless
-    #[allow(dead_code)]
-    pub fn is_lossless(&self) -> bool {
-        let mode = unsafe { WavpackGetMode(self.context) };
-        (mode & MODE_LOSSLESS) != 0
-    }
 
     /// Decode all samples into an AudioBuffer
     pub fn decode(&mut self) -> R<AudioBuffer> {
@@ -207,7 +201,6 @@ impl WavpackDecoder {
 
 
     /// Detect MIME type from image data
-    #[allow(dead_code)]
     fn detect_image_mime_type(data: &[u8]) -> String {
         if data.len() < 8 {
             return "application/octet-stream".to_string();
@@ -960,27 +953,5 @@ impl WvCodec {
         xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
         xml.push_str("</WAVPACKXML>\n");
         Ok(xml)
-    }
-
-    /// Detect MIME type from image data
-    #[allow(dead_code)]
-    fn detect_image_mime_type(data: &[u8]) -> String {
-        if data.len() < 8 {
-            return "application/octet-stream".to_string();
-        }
-
-        if data.starts_with(b"\xFF\xD8\xFF") {
-            "image/jpeg".to_string()
-        } else if data.starts_with(b"\x89PNG\r\n\x1A\n") {
-            "image/png".to_string()
-        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
-            "image/gif".to_string()
-        } else if data.starts_with(b"RIFF") && data[8..12] == *b"WEBP" {
-            "image/webp".to_string()
-        } else if data.starts_with(b"\x00\x00\x01\x00") {
-            "image/x-icon".to_string()
-        } else {
-            "application/octet-stream".to_string()
-        }
     }
 }
