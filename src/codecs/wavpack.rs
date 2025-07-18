@@ -451,7 +451,7 @@ impl WavpackEncoder {
             final_binary_tags
         );
 
-        Ok(self.output_buffer.clone())
+        Ok(std::mem::take(&mut self.output_buffer))
     }
 
     /// Convert f32 samples to i32 and interleave by channels
@@ -741,8 +741,8 @@ impl Codec for WvCodec {
                         let mime_type = Self::detect_image_mime_type(&data_buffer);
                         let image = ImageChunk {
                             mime_type,
-                            description: item_name.clone(),
-                            data: data_buffer.clone(),
+                            description: item_name,
+                            data: data_buffer,
                         };
                         metadata.add_image(image);
                     }

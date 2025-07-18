@@ -38,7 +38,7 @@ fn main() -> R<()> {
         elapsed_time.as_secs_f32()
     );
 
-    let output_file = "/Users/tfarrell/Desktop/FLAC output test.flac";
+    let output_file = "/Users/tfarrell/Desktop/FLAC output test.wav";
 
     // // flac_debug(input_file)?;
 

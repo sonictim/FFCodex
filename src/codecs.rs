@@ -61,7 +61,7 @@ impl AudioBuffer {
         if self.sample_rate != new_rate {
             resample::resample_windowed_sinc(&self.data[i], self.sample_rate, new_rate)
         } else {
-            self.data[i].clone()
+            std::mem::take(&mut self.data[i])
         }
     }
     pub fn change_bit_depth(&mut self, new_bit_depth: u16) {
@@ -91,9 +91,7 @@ impl AudioBuffer {
             ));
         }
 
-        let first_channel = std::mem::take(&mut self.data[0]);
-        self.data.clear();
-        self.data.push(first_channel);
+        self.data.truncate(1);
 
         self.channels = 1;
 
@@ -125,7 +123,7 @@ impl SampleFormat {
 
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
-    map: std::collections::BTreeMap<String, String>, // Key-value pairs for metadata fields
+    map: std::collections::HashMap<String, String>, // Key-value pairs for metadata fields
     images: Vec<ImageChunk>,                         // Associated images (album art, etc.)
     // Audio format information needed for fmt chunk reconstruction
     pub sample_rate: u32,
@@ -137,7 +135,7 @@ pub struct Metadata {
 impl Metadata {
     pub fn new() -> Self {
         Metadata {
-            map: std::collections::BTreeMap::new(),
+            map: std::collections::HashMap::new(),
             images: Vec::new(),
             sample_rate: 0,
             channels: 0,
@@ -147,7 +145,7 @@ impl Metadata {
     }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
-        println!("Set field: {} = {}", key, value);
+        dprintln!("Set field: {} = {}", key, value);
         self.map.insert(key.to_string(), value.to_string());
 
         // Handle field mappings for professional metadata workflow
@@ -283,7 +281,7 @@ impl Metadata {
         &self.images
     }
 
-    pub fn get_all_fields(&self) -> &std::collections::BTreeMap<String, String> {
+    pub fn get_all_fields(&self) -> &std::collections::HashMap<String, String> {
         &self.map
     }
 

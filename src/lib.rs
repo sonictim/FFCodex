@@ -53,19 +53,10 @@ pub fn clean_multi_mono(path: &str) -> R<()> {
 
     // Process in chunks to minimize memory usage
     {
-        let codec = get_codec(path)?;
-        if codec.file_extension() == "wv" {
-            let mut codex = Codex::open(path)?;
-            codex.convert_dual_mono()?;
-            codex.export(temp_path.to_str().unwrap())?;
-        } else {
-            let mut buffer = codec.decode_file(path)?; // Load once
-            let metadata = codec.extract_metadata_from_file(path)?;
-            buffer.strip_multi_mono()?; // Process in-place
-            codec.encode_file(&Some(buffer), temp_path.to_str().unwrap())?; // Write once
-            codec.embed_metadata_to_file(temp_path.to_str().unwrap(), &metadata)?;
-        } // All memory freed here
-    }
+        let mut codex = Codex::open(path)?;
+        codex.convert_dual_mono()?;
+        codex.export(temp_path.to_str().unwrap())?;
+    } // All memory freed here
 
     // Replace original - use same robust logic as export()
     match std::fs::rename(&temp_path, path) {
@@ -257,9 +248,27 @@ impl Codex {
                 // Encode the audio first
                 codec.encode_file(&self.buffer, temp_path)?;
 
-                // Embed metadata if available
+                // Embed metadata if available, updating it with current buffer info
                 if let Some(metadata) = &self.metadata {
-                    codec.embed_metadata_to_file(temp_path, metadata)?;
+                    if let Some(buffer) = &self.buffer {
+                        let mut updated_metadata = metadata.clone();
+                        updated_metadata.sample_rate = buffer.sample_rate;
+                        updated_metadata.channels = buffer.channels;
+                        updated_metadata.bit_depth = match buffer.format {
+                            SampleFormat::U8 => 8,
+                            SampleFormat::I16 => 16,
+                            SampleFormat::I24 => 24,
+                            SampleFormat::I32 => 32,
+                            SampleFormat::F32 => 32,
+                        };
+                        updated_metadata.format_tag = match buffer.format {
+                            SampleFormat::F32 => 3, // IEEE float
+                            _ => 1,                 // PCM
+                        };
+                        codec.embed_metadata_to_file(temp_path, &updated_metadata)?;
+                    } else {
+                        codec.embed_metadata_to_file(temp_path, metadata)?;
+                    }
                 }
             }
             Err(error) => return Err(error),
@@ -286,6 +295,11 @@ impl Codex {
             ));
         };
         buffer.strip_multi_mono()?;
+
+        // Update metadata to reflect the new channel count
+        if let Some(metadata) = &mut self.metadata {
+            metadata.channels = buffer.channels;
+        }
 
         Ok(())
     }
