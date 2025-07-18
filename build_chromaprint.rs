@@ -60,7 +60,9 @@ pub fn build() {
         .define("BUILD_TESTS", "OFF") // Don't build tests
         .define("WITH_FFTW3", "OFF") // Use built-in FFT implementation
         .define("WITH_AVCODEC", "OFF") // We don't need AVCodec integration
-        .define("WITH_AVFORMAT", "OFF"); // We don't need AVFormat integration
+        .define("WITH_AVFORMAT", "OFF") // We don't need AVFormat integration
+        .define("CMAKE_C_FLAGS", "-w") // Suppress all C compiler warnings
+        .define("CMAKE_CXX_FLAGS", "-w"); // Suppress all C++ compiler warnings
 
     // Platform-specific configuration
     if is_windows {
