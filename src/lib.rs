@@ -1,6 +1,6 @@
 // pub mod decode;
 pub mod codecs;
-// pub mod metadata;
+pub mod ixml;
 use std::path::PathBuf;
 
 use codecs::*;
@@ -163,18 +163,18 @@ impl Codex {
             Some(metadata) => metadata,
             None => return Err(anyhow::anyhow!("No metadata available to embed")),
         };
-        
+
         // Get codec based on OUTPUT file extension, not input file
         let output_codec = get_codec(file_path)?;
-        
+
         // If we have audio buffer, create a new file with audio + metadata
         if let Some(buffer) = &self.buffer {
             // First encode the audio to the target format
             let encoded_data = output_codec.encode(&self.buffer)?;
-            
+
             // Write the encoded data to file
             std::fs::write(file_path, encoded_data)?;
-            
+
             // Update metadata with the audio format information from the buffer
             let mut updated_metadata = metadata.clone();
             updated_metadata.sample_rate = buffer.sample_rate;
@@ -188,10 +188,9 @@ impl Codex {
             };
             updated_metadata.format_tag = match buffer.format {
                 SampleFormat::F32 => 3, // IEEE float
-                _ => 1, // PCM
+                _ => 1,                 // PCM
             };
-            
-            
+
             // Then embed metadata to the newly created file
             output_codec.embed_metadata_to_file(file_path, &updated_metadata)?;
         } else {

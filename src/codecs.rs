@@ -125,8 +125,8 @@ impl SampleFormat {
 
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
-    map: std::collections::HashMap<String, String>, // Key-value pairs for metadata fields
-    images: Vec<ImageChunk>,                        // Associated images (album art, etc.)
+    map: std::collections::BTreeMap<String, String>, // Key-value pairs for metadata fields
+    images: Vec<ImageChunk>,                         // Associated images (album art, etc.)
     // Audio format information needed for fmt chunk reconstruction
     pub sample_rate: u32,
     pub channels: u16,
@@ -137,7 +137,7 @@ pub struct Metadata {
 impl Metadata {
     pub fn new() -> Self {
         Metadata {
-            map: std::collections::HashMap::new(),
+            map: std::collections::BTreeMap::new(),
             images: Vec::new(),
             sample_rate: 0,
             channels: 0,
@@ -147,99 +147,126 @@ impl Metadata {
     }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
+        println!("Set field: {} = {}", key, value);
         self.map.insert(key.to_string(), value.to_string());
-        
+
         // Handle field mappings for professional metadata workflow
         self.apply_field_mappings(key, value);
-        
+
         Ok(())
     }
-    
+
     /// Apply field mappings to ensure metadata appears in multiple locations
     fn apply_field_mappings(&mut self, key: &str, value: &str) {
         match key {
             // Description field mapping - appears in multiple places
             "DESCRIPTION" => {
-                self.map.insert("Description".to_string(), value.to_string());
-                self.map.insert("USER_DESCRIPTION".to_string(), value.to_string());
-                self.map.insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
+                self.map
+                    .insert("Description".to_string(), value.to_string());
+                self.map
+                    .insert("USER_DESCRIPTION".to_string(), value.to_string());
+                self.map
+                    .insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
                 self.map.insert("Comment".to_string(), value.to_string());
             }
             "Description" => {
-                self.map.insert("DESCRIPTION".to_string(), value.to_string());
-                self.map.insert("USER_DESCRIPTION".to_string(), value.to_string());
-                self.map.insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
+                self.map
+                    .insert("DESCRIPTION".to_string(), value.to_string());
+                self.map
+                    .insert("USER_DESCRIPTION".to_string(), value.to_string());
+                self.map
+                    .insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
             }
-            
+
             // Designer/Originator field mapping
             "USER_DESIGNER" => {
                 self.map.insert("Originator".to_string(), value.to_string());
-                self.map.insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
-                self.map.insert("ASWG_originator".to_string(), value.to_string());
+                self.map
+                    .insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_originator".to_string(), value.to_string());
             }
             "Originator" => {
-                self.map.insert("USER_DESIGNER".to_string(), value.to_string());
-                self.map.insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
+                self.map
+                    .insert("USER_DESIGNER".to_string(), value.to_string());
+                self.map
+                    .insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
             }
-            
+
             // Category field mapping
             "USER_CATEGORY" => {
                 self.map.insert("Genre".to_string(), value.to_string());
-                self.map.insert("ASWG_category".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_category".to_string(), value.to_string());
             }
             "Genre" => {
-                self.map.insert("USER_CATEGORY".to_string(), value.to_string());
-                self.map.insert("ASWG_category".to_string(), value.to_string());
+                self.map
+                    .insert("USER_CATEGORY".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_category".to_string(), value.to_string());
             }
-            
+
             // Subcategory field mapping
             "USER_SUBCATEGORY" => {
-                self.map.insert("ASWG_subCategory".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_subCategory".to_string(), value.to_string());
             }
-            
+
             // Library field mapping
             "USER_LIBRARY" => {
-                self.map.insert("AlbumArtist".to_string(), value.to_string());
-                self.map.insert("ASWG_library".to_string(), value.to_string());
+                self.map
+                    .insert("AlbumArtist".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_library".to_string(), value.to_string());
             }
             "AlbumArtist" => {
-                self.map.insert("USER_LIBRARY".to_string(), value.to_string());
-                self.map.insert("ASWG_library".to_string(), value.to_string());
+                self.map
+                    .insert("USER_LIBRARY".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_library".to_string(), value.to_string());
             }
-            
+
             // Track title field mapping
             "USER_TRACKTITLE" => {
                 self.map.insert("Title".to_string(), value.to_string());
-                self.map.insert("ASWG_songTitle".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_songTitle".to_string(), value.to_string());
             }
             "Title" => {
-                self.map.insert("USER_TRACKTITLE".to_string(), value.to_string());
-                self.map.insert("ASWG_songTitle".to_string(), value.to_string());
+                self.map
+                    .insert("USER_TRACKTITLE".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_songTitle".to_string(), value.to_string());
             }
-            
+
             // Microphone field mapping
             "USER_MICROPHONE" => {
-                self.map.insert("ASWG_micType".to_string(), value.to_string());
+                self.map
+                    .insert("ASWG_micType".to_string(), value.to_string());
             }
-            
+
             // Category ID field mapping
             "USER_CATID" => {
                 self.map.insert("ASWG_catId".to_string(), value.to_string());
             }
-            
+
             // Keywords field mapping
             "USER_KEYWORDS" => {
                 // Keywords often appear in multiple places in professional metadata
             }
-            
+
             _ => {} // No mapping for other fields
         }
-        
+
         // Generate category full from category and subcategory (after processing the main field)
         if key == "USER_CATEGORY" || key == "USER_SUBCATEGORY" {
-            if let (Some(category), Some(subcategory)) = (self.map.get("USER_CATEGORY"), self.map.get("USER_SUBCATEGORY")) {
+            if let (Some(category), Some(subcategory)) = (
+                self.map.get("USER_CATEGORY"),
+                self.map.get("USER_SUBCATEGORY"),
+            ) {
                 let category_full = format!("{}-{}", category, subcategory);
-                self.map.insert("USER_CATEGORYFULL".to_string(), category_full);
+                self.map
+                    .insert("USER_CATEGORYFULL".to_string(), category_full);
             }
         }
     }
@@ -256,7 +283,7 @@ impl Metadata {
         &self.images
     }
 
-    pub fn get_all_fields(&self) -> &std::collections::HashMap<String, String> {
+    pub fn get_all_fields(&self) -> &std::collections::BTreeMap<String, String> {
         &self.map
     }
 
@@ -270,69 +297,83 @@ impl Metadata {
             println!("No images found");
         }
     }
-}
 
-// Common metadata parsing utilities
-impl Metadata {
-    /// Parse iXML metadata from XML string
-    pub fn parse_ixml(&mut self, xml: &str) -> R<()> {
-        use quick_xml::{Reader, events::Event};
+    // /// Parse iXML metadata from XML string
+    // pub fn parse_ixml(&mut self, xml: &str) -> R<()> {
+    //     use quick_xml::{Reader, events::Event};
 
-        let mut reader = Reader::from_str(xml);
-        reader.config_mut().trim_text(true);
+    //     let mut reader = Reader::from_str(xml);
+    //     reader.config_mut().trim_text(true);
 
-        let mut buf = Vec::new();
-        let mut current_path = Vec::new();
-        let mut current_text = String::new();
+    //     let mut buf = Vec::new();
+    //     let mut current_path = Vec::new();
+    //     let mut current_text = String::new();
 
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e)) => {
-                    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    current_path.push(name.clone());
-                    current_text.clear();
-                }
-                Ok(Event::End(ref e)) => {
-                    let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+    //     loop {
+    //         match reader.read_event_into(&mut buf) {
+    //             Ok(Event::Start(ref e)) => {
+    //                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+    //                 current_path.push(name.clone());
+    //                 current_text.clear();
+    //             }
+    //             Ok(Event::End(ref e)) => {
+    //                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
 
-                    if let Some(last) = current_path.last() {
-                        if last == &name && !current_text.trim().is_empty() {
-                            // Create a key from the path
-                            let key = if current_path.len() > 1 {
-                                format!("{}_{}", current_path[current_path.len() - 2], name)
-                            } else {
-                                name.clone()
-                            };
-                            self.set_field(&key, current_text.trim())?;
-                        }
-                    }
-                    current_path.pop();
-                    current_text.clear();
-                }
-                Ok(Event::Text(ref e)) => {
-                    if let Ok(text) = e.unescape() {
-                        current_text.push_str(&text);
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(_) => {
-                    // If XML parsing fails, fall back to simple parsing
-                    for line in xml.lines() {
-                        if let Some(idx) = line.find('=') {
-                            let key = line[0..idx].trim();
-                            let value = line[idx + 1..].trim();
-                            self.set_field(key, value)?;
-                        }
-                    }
-                    break;
-                }
-                _ => {}
-            }
-            buf.clear();
-        }
+    //                 if let Some(last) = current_path.last() {
+    //                     if last == &name && !current_text.trim().is_empty() {
+    //                         // Create a key from the path - use the top-level block as prefix
+    //                         let key = if current_path.len() > 1 {
+    //                             // Find the top-level block (skip BWFXML root)
+    //                             let top_level_block =
+    //                                 if current_path.len() > 2 && current_path[0] == "BWFXML" {
+    //                                     &current_path[1]
+    //                                 } else {
+    //                                     &current_path[0]
+    //                                 };
 
-        Ok(())
-    }
+    //                             // Use top-level block as prefix for consistency
+    //                             match top_level_block.as_str() {
+    //                                 "BEXT" | "USER" | "ASWG" | "STEINBERG" => {
+    //                                     format!("{}_{}", top_level_block, name)
+    //                                 }
+    //                                 _ => {
+    //                                     // For other blocks, use immediate parent as before
+    //                                     format!("{}_{}", current_path[current_path.len() - 2], name)
+    //                                 }
+    //                             }
+    //                         } else {
+    //                             name.clone()
+    //                         };
+    //                         self.set_field(&key, current_text.trim())?;
+    //                     }
+    //                 }
+    //                 current_path.pop();
+    //                 current_text.clear();
+    //             }
+    //             Ok(Event::Text(ref e)) => {
+    //                 if let Ok(text) = e.unescape() {
+    //                     current_text.push_str(&text);
+    //                 }
+    //             }
+    //             Ok(Event::Eof) => break,
+    //             Err(_) => {
+    //                 // If XML parsing fails, fall back to simple parsing
+    //                 for line in xml.lines() {
+    //                     if let Some(idx) = line.find('=') {
+    //                         let key = line[0..idx].trim();
+    //                         let value = line[idx + 1..].trim();
+    //                         self.set_field(key, value)?;
+    //                     }
+    //                 }
+    //                 break;
+    //             }
+    //             _ => {}
+    //         }
+    //         buf.clear();
+    //     }
+
+    //     Ok(())
+    // }
 
     /// Parse basic ID3 metadata (ID3v1 and simple ID3v2)
     pub fn parse_id3(&mut self, data: &[u8]) -> R<()> {

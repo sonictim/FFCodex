@@ -684,9 +684,14 @@ impl Codec for WvCodec {
                         .unwrap_or(value_buffer.len());
                     let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
                     if !item_name.is_empty() && !value.is_empty() {
-                        // Map common WavPack tag names to standard names
-                        let standard_key = self.normalize_wavpack_key(&item_name);
-                        metadata.set_field(&standard_key, &value)?;
+                        // Special handling for iXML content
+                        if item_name.to_uppercase() == "IXML" {
+                            metadata.parse_ixml(&value)?;
+                        } else {
+                            // Map common WavPack tag names to standard names
+                            let standard_key = self.normalize_wavpack_key(&item_name);
+                            metadata.set_field(&standard_key, &value)?;
+                        }
                     }
                 }
             }
@@ -830,7 +835,7 @@ impl WvCodec {
 
         // Create and add iXML from all metadata fields
         if !metadata.get_all_fields().is_empty() {
-            let ixml_content = self.create_ixml_from_metadata(metadata);
+            let ixml_content = self.create_ixml_from_metadata(metadata)?;
             let c_key = CString::new("iXML")
                 .map_err(|_| anyhow!("Invalid metadata key"))?;
             let c_value = CString::new(ixml_content.as_str())
@@ -901,7 +906,15 @@ impl WvCodec {
             "ENCODER" => "EncodingSettings".to_string(),
             "LANGUAGE" => "Language".to_string(),
             "PERFORMER" => "Performer".to_string(),
-            _ => key.to_string(),
+            _ => {
+                // Preserve WAV-specific prefixed fields for cross-format compatibility
+                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
+                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                    key.to_string()
+                } else {
+                    key.to_string()
+                }
+            }
         }
     }
 
@@ -927,28 +940,26 @@ impl WvCodec {
             "Language" => "LANGUAGE".to_string(),
             "Performer" => "PERFORMER".to_string(),
             // For any other keys, use uppercase (WavPack convention)
-            _ => key.to_uppercase(),
+            // But preserve WAV-specific prefixed fields for cross-format compatibility
+            _ => {
+                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
+                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                    key.to_string()
+                } else {
+                    key.to_uppercase()
+                }
+            }
         }
     }
 
     /// Create iXML from all metadata fields
-    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> String {
-        let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<BWF_IXML_1_0>\n");
-        
-        for (key, value) in metadata.get_all_fields() {
-            // Escape XML special characters
-            let escaped_value = value
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;");
-            
-            xml.push_str(&format!("  <{}>{}</{}>\n", key, escaped_value, key));
-        }
-        
-        xml.push_str("</BWF_IXML_1_0>\n");
-        xml
+    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<WAVPACKXML>\n");
+        xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
+        xml.push_str("</WAVPACKXML>\n");
+        Ok(xml)
     }
 
     /// Detect MIME type from image data

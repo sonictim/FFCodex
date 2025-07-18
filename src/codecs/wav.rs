@@ -538,7 +538,6 @@ impl Codec for WavCodec {
     }
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
-        
         // Read the existing file
         let file = std::fs::File::open(file_path)?;
         let mapped_file = unsafe { MmapOptions::new().map(&file)? };
@@ -559,13 +558,15 @@ impl WavCodec {
 
         // Extract audio data using the metadata's audio format information
         let data_chunk = self.extract_audio_data_only(input)?;
-        
+
         // Create AudioInfo from metadata's format information
         let audio_info = AudioInfo {
             format_tag: metadata.format_tag,
             channels: metadata.channels,
             sample_rate: metadata.sample_rate,
-            byte_rate: metadata.sample_rate * metadata.channels as u32 * (metadata.bit_depth / 8) as u32,
+            byte_rate: metadata.sample_rate
+                * metadata.channels as u32
+                * (metadata.bit_depth / 8) as u32,
             block_align: metadata.channels * (metadata.bit_depth / 8),
             bits_per_sample: metadata.bit_depth,
         };
@@ -835,108 +836,12 @@ impl WavCodec {
         let mut xml = String::new();
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.push_str("<BWFXML>\n");
-        xml.push_str("  <IXML_VERSION>1.61</IXML_VERSION>\n");
-        
-        // BEXT section for BWF metadata
-        xml.push_str("  <BEXT>\n");
-        if let Some(description) = metadata.get_field("DESCRIPTION").or_else(|| metadata.get_field("Description")) {
-            let escaped_value = self.xml_escape(&description);
-            xml.push_str(&format!("    <BWF_DESCRIPTION>{}</BWF_DESCRIPTION>\n", escaped_value));
-        }
-        if let Some(time_ref) = metadata.get_field("TimeReference") {
-            xml.push_str(&format!("    <BWF_TIME_REFERENCE_LOW>{}</BWF_TIME_REFERENCE_LOW>\n", time_ref));
-            xml.push_str("    <BWF_TIME_REFERENCE_HIGH>0</BWF_TIME_REFERENCE_HIGH>\n");
-        }
-        xml.push_str("  </BEXT>\n");
-        
-        // STEINBERG section for professional metadata
-        xml.push_str("  <STEINBERG>\n");
-        xml.push_str("    <ATTR_LIST>\n");
-        
-        // Map common professional metadata fields to Steinberg attributes
-        let steinberg_mappings = [
-            ("USER_LIBRARY", "MediaLibrary"),
-            ("USER_CATEGORY", "MediaCategoryPost"),
-            ("USER_MICROPHONE", "MediaRecordingMethod"),
-            ("DESCRIPTION", "MediaComment"),
-            ("USER_LOCATION", "MediaRecordingLocation"),
-            ("USER_MANUFACTURER", "MediaLibraryManufacturerName"),
-            ("USER_DESIGNER", "AudioSoundEditor"),
-            ("USER_TRACKTITLE", "SmfSongName"),
-            ("USER_KEYWORDS", "MusicalInstrument"),
-            ("USER_SUBCATEGORY", "MusicalCategory"),
-        ];
-        
-        for (metadata_key, steinberg_key) in &steinberg_mappings {
-            if let Some(value) = metadata.get_field(metadata_key) {
-                let escaped_value = self.xml_escape(&value);
-                xml.push_str("      <ATTR>\n");
-                xml.push_str(&format!("        <NAME>{}</NAME>\n", steinberg_key));
-                xml.push_str("        <TYPE>string</TYPE>\n");
-                xml.push_str(&format!("        <VALUE>{}</VALUE>\n", escaped_value));
-                xml.push_str("      </ATTR>\n");
-            }
-        }
-        
-        xml.push_str("    </ATTR_LIST>\n");
-        xml.push_str("  </STEINBERG>\n");
-        
-        // USER section for user-defined fields
-        xml.push_str("  <USER>\n");
-        for (key, value) in metadata.get_all_fields() {
-            if !key.is_empty() && !value.is_empty() {
-                // Skip fields that are already in BEXT or are internal fields
-                if !key.starts_with("BWFXML_") && !key.starts_with("BWF_") && 
-                   key != "TimeReference" && key != "OriginationTime" && key != "OriginationDate" &&
-                   key != "CodingHistory" && key != "OriginatorReference" && key != "Originator" {
-                    let escaped_key = self.xml_escape(key);
-                    let escaped_value = self.xml_escape(value);
-                    xml.push_str(&format!(
-                        "    <{}>{}</{}>\n",
-                        escaped_key, escaped_value, escaped_key
-                    ));
-                }
-            }
-        }
-        xml.push_str("  </USER>\n");
-        
-        // ASWG section for Audio Software Working Group metadata
-        xml.push_str("  <ASWG>\n");
-        if let Some(originator) = metadata.get_field("USER_DESIGNER") {
-            let escaped_value = self.xml_escape(&originator);
-            xml.push_str(&format!("    <originator>{}</originator>\n", escaped_value));
-        }
-        if let Some(subcategory) = metadata.get_field("USER_SUBCATEGORY") {
-            let escaped_value = self.xml_escape(&subcategory);
-            xml.push_str(&format!("    <subCategory>{}</subCategory>\n", escaped_value));
-        }
-        if let Some(library) = metadata.get_field("USER_LIBRARY") {
-            let escaped_value = self.xml_escape(&library);
-            xml.push_str(&format!("    <library>{}</library>\n", escaped_value));
-        }
-        if let Some(category) = metadata.get_field("USER_CATEGORY") {
-            let escaped_value = self.xml_escape(&category);
-            xml.push_str(&format!("    <category>{}</category>\n", escaped_value));
-        }
-        if let Some(song_title) = metadata.get_field("USER_TRACKTITLE") {
-            let escaped_value = self.xml_escape(&song_title);
-            xml.push_str(&format!("    <songTitle>{}</songTitle>\n", escaped_value));
-        }
-        if let Some(cat_id) = metadata.get_field("USER_CATID") {
-            let escaped_value = self.xml_escape(&cat_id);
-            xml.push_str(&format!("    <catId>{}</catId>\n", escaped_value));
-        }
-        if let Some(mic_type) = metadata.get_field("USER_MICROPHONE") {
-            let escaped_value = self.xml_escape(&mic_type);
-            xml.push_str(&format!("    <micType>{}</micType>\n", escaped_value));
-        }
-        xml.push_str("  </ASWG>\n");
-        
+        xml.push_str(&ixml::create_ixml_from_metadata(metadata)?);
         xml.push_str("</BWFXML>\n");
         Ok(xml)
     }
 
-    fn xml_escape(&self, text: &str) -> String {
+    pub fn xml_escape(&self, text: &str) -> String {
         text.replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")

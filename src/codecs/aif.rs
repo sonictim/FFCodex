@@ -14,6 +14,7 @@ const AUTH_CHUNK_ID: &[u8; 4] = b"AUTH";
 const COPYRIGHT_CHUNK_ID: &[u8; 4] = b"(c) ";
 const APPL_CHUNK_ID: &[u8; 4] = b"APPL";
 const ID3_CHUNK_ID: &[u8; 4] = b"ID3 ";
+const IXML_CHUNK_ID: &[u8; 4] = b"iXML";
 
 // Chunk Structures
 const HEADER_SIZE: usize = 12; // FORM + size + AIFF
@@ -534,7 +535,7 @@ impl AifCodec {
                 }
                 // Skip existing metadata chunks - we'll recreate them
                 ANNO_CHUNK_ID | COMT_CHUNK_ID | NAME_CHUNK_ID | AUTH_CHUNK_ID
-                | COPYRIGHT_CHUNK_ID | APPL_CHUNK_ID | ID3_CHUNK_ID => {
+                | COPYRIGHT_CHUNK_ID | APPL_CHUNK_ID | ID3_CHUNK_ID | IXML_CHUNK_ID => {
                     cursor.seek(SeekFrom::Current(chunk_size as i64))?;
                     if chunk_size % 2 == 1 {
                         cursor.seek(SeekFrom::Current(1))?;
@@ -562,33 +563,23 @@ impl AifCodec {
             return Err(anyhow!("Invalid AIFF file: missing COMM or SSND chunk"));
         }
 
-        // Write metadata from hashmap
-        for (key, value) in metadata.get_all_fields().iter() {
-            match key.as_str() {
-                "Title" => {
-                    self.write_aif_chunk(&mut output, NAME_CHUNK_ID, value.as_bytes())?;
-                }
-                "Artist" => {
-                    self.write_aif_chunk(&mut output, AUTH_CHUNK_ID, value.as_bytes())?;
-                }
-                "Copyright" => {
-                    self.write_aif_chunk(&mut output, COPYRIGHT_CHUNK_ID, value.as_bytes())?;
-                }
-                "Comment" => {
-                    self.write_aif_chunk(&mut output, ANNO_CHUNK_ID, value.as_bytes())?;
-                }
-                _ => {
-                    // Store other fields as application-specific chunks
-                    let chunk_name = format!("APP{}", key.len().min(4));
-                    let chunk_id = chunk_name.as_bytes();
-                    if chunk_id.len() == 4 {
-                        let mut full_chunk_id = [0u8; 4];
-                        full_chunk_id.copy_from_slice(chunk_id);
-                        self.write_aif_chunk(&mut output, &full_chunk_id, value.as_bytes())?;
-                    }
-                }
-            }
+        // Write basic AIFF metadata chunks for common fields
+        if let Some(title) = metadata.get_field("Title") {
+            self.write_aif_chunk(&mut output, NAME_CHUNK_ID, title.as_bytes())?;
         }
+        if let Some(artist) = metadata.get_field("Artist") {
+            self.write_aif_chunk(&mut output, AUTH_CHUNK_ID, artist.as_bytes())?;
+        }
+        if let Some(copyright) = metadata.get_field("Copyright") {
+            self.write_aif_chunk(&mut output, COPYRIGHT_CHUNK_ID, copyright.as_bytes())?;
+        }
+        if let Some(comment) = metadata.get_field("Comment") {
+            self.write_aif_chunk(&mut output, ANNO_CHUNK_ID, comment.as_bytes())?;
+        }
+
+        // Write comprehensive metadata as iXML chunk (similar to WAV)
+        let ixml_content = self.create_ixml_from_metadata(metadata)?;
+        self.write_aif_chunk(&mut output, IXML_CHUNK_ID, ixml_content.as_bytes())?;
 
         // Write image chunks
         for image in metadata.get_images() {
@@ -617,6 +608,15 @@ impl AifCodec {
             output.write_all(&[0])?; // padding
         }
         Ok(())
+    }
+
+    fn create_ixml_from_metadata(&self, metadata: &Metadata) -> R<String> {
+        let mut xml = String::new();
+        xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        xml.push_str("<AIFFXML>\n");
+        xml.push_str(&crate::ixml::create_ixml_from_metadata(metadata)?);
+        xml.push_str("</AIFFXML>\n");
+        Ok(xml)
     }
 }
 

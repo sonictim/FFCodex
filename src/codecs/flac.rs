@@ -1018,7 +1018,15 @@ impl FlacCodec {
             "PERFORMER" => "Performer",
             "VERSION" => "Version",
             "LOCATION" => "Location",
-            _ => key,
+            _ => {
+                // Preserve WAV-specific prefixed fields for cross-format compatibility
+                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
+                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                    key.to_string()
+                } else {
+                    key.to_string()
+                }
+            }
         }
         .to_string()
     }
@@ -1047,7 +1055,15 @@ impl FlacCodec {
             "Version" => "VERSION".to_string(),
             "Location" => "LOCATION".to_string(),
             // For any other keys, convert to uppercase (Vorbis convention)
-            _ => key.to_uppercase(),
+            // But preserve WAV-specific prefixed fields as-is for cross-format compatibility
+            _ => {
+                if key.starts_with("USER_") || key.starts_with("BEXT_") || 
+                   key.starts_with("ASWG_") || key.starts_with("STEINBERG_") {
+                    key.to_string()
+                } else {
+                    key.to_uppercase()
+                }
+            }
         }
     }
 }

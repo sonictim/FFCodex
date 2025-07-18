@@ -21,7 +21,7 @@ fn main() -> R<()> {
     // };
 
     // let input_file = "/Users/tfarrell/Desktop/DUAL MONO IDEAS/Cloth-Blanket-Vinyl-Backing-Movement_GEN-HD2-28950MOD.flac";
-    let input_file = "/Users/tfarrell/TEMP/SFX RECORD TEMP/240628_004.WAV";
+    let input_file = "/Users/tfarrell/Desktop/RECORDINGS TO PROCESS/EXPORTS/GOREBone_BoneBreaksFromSnapPeas_TF_TJFR.wav";
 
     // clean_multi_mono(input_file)?;
 
@@ -46,16 +46,16 @@ fn main() -> R<()> {
 
     let mut c = Codex::new(input_file)?.decode()?.extract_metadata()?;
 
-    c.print_metadata();
+    // c.print_metadata();
 
     println!(
         "BEFORE: USER_DESIGNER = {:?}",
         c.get_metadata_field("USER_DESIGNER")
     );
-    
+
     // Test professional metadata workflow
     c.set_metadata_field("USER_DESIGNER", "Jacob Flack")?;
-    c.set_metadata_field("DESCRIPTION", "Metal friction sound effects")?;
+    c.set_metadata_field("USER_DESCRIPTION", "Metal friction sound effects")?;
     c.set_metadata_field("USER_CATEGORY", "METAL")?;
     c.set_metadata_field("USER_SUBCATEGORY", "FRICTION")?;
     c.set_metadata_field("USER_LIBRARY", "TJF Recordings")?;
@@ -64,7 +64,7 @@ fn main() -> R<()> {
     c.set_metadata_field("USER_CATID", "METLFric")?;
     c.set_metadata_field("USER_LOCATION", "Frisco, TX")?;
     c.set_metadata_field("USER_KEYWORDS", "metal friction squeaks")?;
-    
+
     println!(
         "AFTER SET: USER_DESIGNER = {:?}",
         c.get_metadata_field("USER_DESIGNER")
@@ -93,8 +93,8 @@ fn main() -> R<()> {
         c2.get_metadata_field("USER_DESIGNER")
     );
     println!(
-        "AFTER EMBED: DESCRIPTION = {:?}",
-        c2.get_metadata_field("DESCRIPTION")
+        "AFTER EMBED: USER_DESCRIPTION = {:?}",
+        c2.get_metadata_field("USER_DESCRIPTION")
     );
     println!(
         "AFTER EMBED: ASWG_originator = {:?}",
