@@ -879,10 +879,71 @@ fn decode_samples(
         bits_per_sample
     );
 
-    let output: Vec<Vec<f32>> = (0..channels as usize)
-        .into_par_iter() // Parallelize over channels
-        .map(|ch| {
-            let mut channel_data = Vec::with_capacity(frame_count);
+    // Use parallel processing only for files with many channels or large frame counts
+    let use_parallel = channels > 4 && frame_count > 10_000;
+    
+    let channel_processor = |ch: usize| {
+        let mut channel_data = Vec::with_capacity(frame_count);
+
+        // For each frame
+        for frame in 0..frame_count {
+            // Calculate the byte index of this sample
+            // This is the formula that properly handles interleaved audio of any channel count
+            let sample_idx = (frame * channels as usize + ch) * bytes_per_sample;
+
+            // Check bounds to prevent buffer overruns
+            if sample_idx + bytes_per_sample > input.len() {
+                break;
+            }
+
+            let val = match bits_per_sample {
+                8 => {
+                    let sample = input[sample_idx] as f32;
+                    (sample - U8_OFFSET) / U8_SCALE
+                }
+                16 => {
+                    let sample = i16::from_le_bytes([input[sample_idx], input[sample_idx + 1]]) as f32;
+                    sample * I16_DIVISOR_RECIP
+                }
+                24 => {
+                    let mut sample = i32::from_le_bytes([
+                        input[sample_idx],
+                        input[sample_idx + 1],
+                        input[sample_idx + 2],
+                        0,
+                    ]);
+                    if sample & I24_SIGN_BIT != 0 {
+                        sample |= I24_SIGN_EXTENSION_MASK;
+                    }
+                    sample as f32 * I24_DIVISOR_RECIP
+                }
+                32 => {
+                    let sample = i32::from_le_bytes([
+                        input[sample_idx],
+                        input[sample_idx + 1],
+                        input[sample_idx + 2],
+                        input[sample_idx + 3],
+                    ]) as f32;
+                    sample * I32_DIVISOR_RECIP
+                }
+                _ => 0.0,
+            };
+
+            channel_data.push(val);
+        }
+        channel_data
+    };
+
+    let output: Vec<Vec<f32>> = if use_parallel {
+        (0..channels as usize).into_par_iter().map(channel_processor).collect()
+    } else {
+        (0..channels as usize).map(channel_processor).collect()
+    };
+
+    Ok(output)
+}
+
+fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
 
             // For each frame
             for frame in 0..frame_count {

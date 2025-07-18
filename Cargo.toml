@@ -14,19 +14,17 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 anyhow = "1.0.98"
-base64 = "0.22.1"
-byteorder = "1.5.0"
-claxon = "0.4.3"
-flacenc = "0.4.0"
-libc = "0.2"       # Added for C memory management
-memmap2 = "0.9.5"
-metaflac = "0.2.8"
-quick-xml = "0.36" # For iXML parsing
-rand = "0.9.1"
-rayon = "1.10.0"
-serde_json = "1.0" # For JSON serialization in metadata chunks
-sha2 = "0.10.9"
-wide = "0.7.0"     # For portable SIMD operations
+base64 = "0.22.1"  # Used by chromaprint
+claxon = "0.4.3"   # FLAC decoding
+flacenc = "0.4.0"  # FLAC encoding
+libc = "0.2"       # C memory management for wavpack/chromaprint
+memmap2 = "0.9.5"  # Memory mapped file I/O
+metaflac = "0.2.8" # FLAC metadata handling
+quick-xml = "0.36" # iXML parsing
+rand = "0.9.1"     # Used by resample dithering and wavpack temp files
+rayon = "1.10.0"   # Parallel processing
+serde_json = "1.0" # JSON serialization in metadata chunks
+sha2 = "0.10.9"    # Used by chromaprint
 
 
 [build-dependencies]

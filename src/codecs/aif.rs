@@ -675,13 +675,73 @@ fn decode_samples(
 
     let samples_per_channel = input.len() / (channels as usize * bytes_per_sample);
 
-    let output: Vec<Vec<f32>> = (0..channels as usize)
-        .into_par_iter() // Parallelize over channels
-        .map(|ch| {
-            let mut channel_data = vec![0.0; samples_per_channel];
+    // Use parallel processing only for files with many channels or large sample counts
+    let use_parallel = channels > 4 && samples_per_channel > 10_000;
+    
+    let channel_processor = |ch: usize| {
+        let mut channel_data = vec![0.0; samples_per_channel];
 
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..samples_per_channel {
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..samples_per_channel {
+            let pos = i * channels as usize + ch;
+            let sample_idx = pos * bytes_per_sample;
+
+            if sample_idx + bytes_per_sample - 1 < input.len() {
+                let val = match bits_per_sample {
+                    8 => {
+                        let sample = input[sample_idx] as i8;
+                        sample as f32 / 128.0
+                    }
+                    16 => {
+                        let sample = i16::from_be_bytes([input[sample_idx], input[sample_idx + 1]]);
+                        sample as f32 / 32768.0
+                    }
+                    24 => {
+                        let mut sample = i32::from_be_bytes([
+                            0,
+                            input[sample_idx],
+                            input[sample_idx + 1],
+                            input[sample_idx + 2],
+                        ]);
+                        if sample & 0x800000 != 0 {
+                            sample |= 0xFF000000;
+                        }
+                        sample as f32 / 8388608.0
+                    }
+                    32 => {
+                        let sample = i32::from_be_bytes([
+                            input[sample_idx],
+                            input[sample_idx + 1],
+                            input[sample_idx + 2],
+                            input[sample_idx + 3],
+                        ]);
+                        sample as f32 / 2147483648.0
+                    }
+                    _ => 0.0,
+                };
+                channel_data[i] = val;
+            }
+        }
+        channel_data
+    };
+
+    let output: Vec<Vec<f32>> = if use_parallel {
+        (0..channels as usize).into_par_iter().map(channel_processor).collect()
+    } else {
+        (0..channels as usize).map(channel_processor).collect()
+    };
+
+    Ok(output)
+}
+
+// IEEE 80-bit extended precision float parsing functions
+
+fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: u16) -> R<()> {
+    let channels = buffer.channels as usize;
+    let frames = buffer.data[0].len();
+
+    for i in 0..frames {
+        for ch in 0..channels {
                 let pos = i * channels as usize + ch;
                 let sample_idx = pos * bytes_per_sample;
 
