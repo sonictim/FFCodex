@@ -9,6 +9,7 @@ use crate::prelude::*;
 pub mod bindings;
 mod chromaprint;
 pub mod resample;
+pub mod soundminer;
 
 // Standard bit depths
 const BIT_DEPTH_8: u16 = 8;

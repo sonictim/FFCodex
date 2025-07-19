@@ -8,7 +8,7 @@ fn main() -> R<()> {
     println!("Chromaprint version: {}", version);
 
     // Get input file from command line arguments
-    let input_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
+    let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR.wv";
 
     // clean_multi_mono(input_file)?;
 
