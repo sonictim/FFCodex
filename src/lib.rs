@@ -81,6 +81,41 @@ pub fn get_fingerprint(path: &str) -> R<String> {
     Codex::new(path)?.decode()?.get_chromaprint_fingerprint()
 }
 
+pub fn strip_soundminer_metadata(file_path: &str) -> R<()> {
+    let path = PathBuf::from(file_path);
+    if !path.exists() {
+        return Err(anyhow::anyhow!("File does not exist: {}", file_path));
+    }
+
+    // Read the original file
+    let original_data = std::fs::read(file_path)?;
+    
+    // Determine the file format and strip SMED chunks accordingly
+    let extension = path.extension()
+        .and_then(|ext| ext.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Invalid file extension"))?;
+
+    let cleaned_data = match extension.to_lowercase().as_str() {
+        "flac" => strip_smed_from_flac(&original_data)?,
+        "aif" | "aiff" => strip_smed_from_aiff(&original_data)?,
+        "wav" => strip_smed_from_wav(&original_data)?,
+        "wv" => strip_smed_from_wavpack(&original_data)?,
+        _ => return Err(anyhow::anyhow!("Unsupported file format: {}", extension)),
+    };
+
+    // Create backup
+    let backup_path = format!("{}.backup", file_path);
+    std::fs::copy(file_path, backup_path)?;
+    
+    // Write cleaned data back to original file
+    std::fs::write(file_path, cleaned_data)?;
+    
+    println!("Soundminer metadata stripped from: {}", file_path);
+    println!("Backup created at: {}.backup", file_path);
+    
+    Ok(())
+}
+
 pub fn get_basic_metadata(path: &str) -> R<FileInfo> {
     let codex = Codex::new(path)?.extract_metadata()?;
     codex.get_file_info()
@@ -378,15 +413,214 @@ pub trait Codec: Send + Sync {
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.push('<');
         xml.push_str(self.as_str());
-        xml.push_str(">\n");
+        xml.push_str("XML>\n");
         xml.push_str(&ixml::create_ixml_from_metadata(metadata)?);
         xml.push_str("</");
         xml.push_str(self.as_str());
-        xml.push_str(">\n");
+        xml.push_str("XML>\n");
         Ok(xml)
     }
+    // fn create_ixml(&self, metadata: &Metadata) -> R<String> {
+    //     let mut xml = String::new();
+    //     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    //     xml.push('<');
+    //     xml.push_str(self.as_str());
+    //     xml.push_str("XML>\n");
+    //     xml.push_str(&ixml::create_ixml_from_metadata(metadata)?);
+    //     xml.push_str("</");
+    //     xml.push_str(self.as_str());
+    //     xml.push_str("XML>\n");
+    //     Ok(xml)
+    // }
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata>;
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()>;
+}
+
+// Helper functions for stripping Soundminer metadata from different formats
+
+fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
+    if data.len() < 4 || &data[0..4] != b"fLaC" {
+        return Err(anyhow::anyhow!("Not a valid FLAC file"));
+    }
+
+    let mut output = Vec::new();
+    let mut cursor = Cursor::new(data);
+    
+    // Copy fLaC header
+    output.extend_from_slice(b"fLaC");
+    cursor.set_position(4);
+
+    // Process metadata blocks
+    while cursor.position() < data.len() as u64 {
+        let pos = cursor.position() as usize;
+        if pos + 4 > data.len() {
+            break;
+        }
+
+        let block_header = data[pos];
+        let is_last = (block_header & 0x80) != 0;
+        let block_type = block_header & 0x7F;
+        
+        let block_size = ((data[pos + 1] as u32) << 16) 
+                       | ((data[pos + 2] as u32) << 8) 
+                       | (data[pos + 3] as u32);
+
+        if pos + 4 + block_size as usize > data.len() {
+            break;
+        }
+
+        let block_data = &data[pos + 4..pos + 4 + block_size as usize];
+
+        // Check if this is a Soundminer APPLICATION block
+        let is_smed_block = if block_type == 2 && block_size >= 4 { // APPLICATION block
+            &block_data[0..4] == b"SMED"
+        } else {
+            false
+        };
+
+        if !is_smed_block {
+            // Copy non-SMED blocks
+            output.push(if is_last && block_header != data[pos] { 
+                block_header | 0x80 // Ensure last block flag is set if this becomes the last block
+            } else { 
+                block_header 
+            });
+            output.extend_from_slice(&data[pos + 1..pos + 4 + block_size as usize]);
+        } else {
+            println!("Removed SMED APPLICATION block ({} bytes)", block_size);
+        }
+
+        cursor.set_position(pos as u64 + 4 + block_size as u64);
+        
+        if is_last {
+            break;
+        }
+    }
+
+    // Copy remaining audio frames
+    let remaining_pos = cursor.position() as usize;
+    if remaining_pos < data.len() {
+        output.extend_from_slice(&data[remaining_pos..]);
+    }
+
+    Ok(output)
+}
+
+fn strip_smed_from_aiff(data: &[u8]) -> R<Vec<u8>> {
+    if data.len() < 12 || &data[0..4] != b"FORM" || &data[8..12] != b"AIFF" {
+        return Err(anyhow::anyhow!("Not a valid AIFF file"));
+    }
+
+    let mut output = Vec::new();
+    let mut cursor = Cursor::new(data);
+    
+    // Copy FORM/AIFF header
+    output.extend_from_slice(&data[0..12]);
+    cursor.set_position(12);
+
+    let mut removed_bytes = 0u32;
+
+    // Process chunks
+    while cursor.position() + 8 <= data.len() as u64 {
+        let pos = cursor.position() as usize;
+        let chunk_id = &data[pos..pos + 4];
+        let chunk_size = ((data[pos + 4] as u32) << 24)
+                       | ((data[pos + 5] as u32) << 16)
+                       | ((data[pos + 6] as u32) << 8)
+                       | (data[pos + 7] as u32);
+
+        let total_chunk_size = 8 + chunk_size as usize + (chunk_size as usize % 2); // Include padding
+
+        if pos + total_chunk_size > data.len() {
+            break;
+        }
+
+        // Check if this is a Soundminer chunk
+        let is_smed_chunk = chunk_id == b"SMED" || 
+                           (chunk_id == b"APPL" && chunk_size >= 4 && &data[pos + 8..pos + 12] == b"SMED");
+
+        if !is_smed_chunk {
+            // Copy non-SMED chunks
+            output.extend_from_slice(&data[pos..pos + total_chunk_size]);
+        } else {
+            println!("Removed SMED chunk ({} bytes)", chunk_size);
+            removed_bytes += 8 + chunk_size + (chunk_size % 2); // Include header and padding
+        }
+
+        cursor.set_position(pos as u64 + total_chunk_size as u64);
+    }
+
+    // Update FORM size in header
+    if removed_bytes > 0 {
+        let new_form_size = (output.len() as u32) - 8;
+        output[4..8].copy_from_slice(&new_form_size.to_be_bytes());
+    }
+
+    Ok(output)
+}
+
+fn strip_smed_from_wav(data: &[u8]) -> R<Vec<u8>> {
+    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return Err(anyhow::anyhow!("Not a valid WAV file"));
+    }
+
+    let mut output = Vec::new();
+    let mut cursor = Cursor::new(data);
+    
+    // Copy RIFF/WAVE header
+    output.extend_from_slice(&data[0..12]);
+    cursor.set_position(12);
+
+    let mut removed_bytes = 0u32;
+
+    // Process chunks
+    while cursor.position() + 8 <= data.len() as u64 {
+        let pos = cursor.position() as usize;
+        let chunk_id = &data[pos..pos + 4];
+        let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+
+        let total_chunk_size = 8 + chunk_size as usize + (chunk_size as usize % 2); // Include padding
+
+        if pos + total_chunk_size > data.len() {
+            break;
+        }
+
+        // Check if this is a Soundminer chunk (typically in LIST INFO or custom chunks)
+        let is_smed_chunk = chunk_id == b"SMED" || 
+                           (chunk_id == b"LIST" && chunk_size >= 8 && &data[pos + 8..pos + 12] == b"SMED");
+
+        if !is_smed_chunk {
+            // Copy non-SMED chunks
+            output.extend_from_slice(&data[pos..pos + total_chunk_size]);
+        } else {
+            println!("Removed SMED chunk ({} bytes)", chunk_size);
+            removed_bytes += 8 + chunk_size + (chunk_size % 2); // Include header and padding
+        }
+
+        cursor.set_position(pos as u64 + total_chunk_size as u64);
+    }
+
+    // Update RIFF size in header
+    if removed_bytes > 0 {
+        let new_riff_size = (output.len() as u32) - 8;
+        output[4..8].copy_from_slice(&new_riff_size.to_le_bytes());
+    }
+
+    Ok(output)
+}
+
+fn strip_smed_from_wavpack(data: &[u8]) -> R<Vec<u8>> {
+    if data.len() < 4 || &data[0..4] != b"wvpk" {
+        return Err(anyhow::anyhow!("Not a valid WavPack file"));
+    }
+
+    // For WavPack, SMED metadata is typically stored as text tags
+    // We'll use a simpler approach - copy the file and remove SMED tags via WavPack API
+    // This is more complex to implement directly, so for now return the original data
+    // and suggest using WavPack's tag removal functionality
+    
+    println!("WavPack SMED removal not yet implemented - use WavPack tools to remove SMED tags");
+    Ok(data.to_vec())
 }

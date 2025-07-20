@@ -1,154 +1,253 @@
 use crate::prelude::*;
 
-pub fn set_soundminer_metadata(key: &str, value: &str, map: &mut HashMap<String, String>) {
-    match key
+pub fn get_metadata_keys(key: &str) -> &'static [&'static str] {
+    // Strip all possible prefixes in sequence
+    let normalized_key = key
         .strip_prefix("USER_")
-        .unwrap_or(key)
-        .strip_prefix("ASWG_")
-        .unwrap_or(key)
-        .strip_prefix("BEXT_")
-        .unwrap_or(key)
-        .strip_prefix("STEINBERG_")
-        .unwrap_or(key)
-        .strip_prefix("VORBIS_")
-        .unwrap_or(key)
-        .strip_prefix("WV_")
-        .unwrap_or(key)
-        .strip_prefix("TAG_")
+        .or_else(|| key.strip_prefix("ASWG_"))
+        .or_else(|| key.strip_prefix("BEXT_"))
+        .or_else(|| key.strip_prefix("STEINBERG_"))
+        .or_else(|| key.strip_prefix("VORBIS_"))
+        .or_else(|| key.strip_prefix("WV_"))
+        .or_else(|| key.strip_prefix("TAG_"))
         .unwrap_or(key)
         .to_lowercase()
-        .replace([' ', '_', '-', '.'], "")
-        .as_str()
+        .replace([' ', '_', '-', '.'], "");
+
+    match normalized_key.as_str()
     {
-        "catid" => {
-            map.insert("USER_CATID".to_string(), value.to_string());
-            map.insert("ASWG_catId".to_string(), value.to_string());
-            map.insert("TAG_CatID".to_string(), value.to_string());
-        }
-        "category" => {
-            map.insert("USER_CATEGORY".to_string(), value.to_string());
-            map.insert("ASWG_category".to_string(), value.to_string());
-            map.insert("STEINBERG_MediaCategoryPost".to_string(), value.to_string());
-            map.insert("TAG_Genre".to_string(), value.to_string());
-            map.insert("TAG_Category".to_string(), value.to_string());
-        }
-        "subcategory" => {
-            map.insert("USER_SUBCATEGORY".to_string(), value.to_string());
-            map.insert("ASWG_subCategory".to_string(), value.to_string());
-            map.insert("STEINBERG_MusicalCategory".to_string(), value.to_string());
-            map.insert("TAG_SubCategory".to_string(), value.to_string());
-        }
-        "categoryfull" => {
-            map.insert("USER_CATEGORYFULL".to_string(), value.to_string());
-            map.insert("TAG_CategoryFull".to_string(), value.to_string());
-        }
-        "usercategory" => {
-            map.insert("USER_USERCATEGORY".to_string(), value.to_string());
-            map.insert("ASWG_userCategory".to_string(), value.to_string());
-            map.insert("TAG_UserCategory".to_string(), value.to_string());
-        }
-        "vendorcategory" => {
-            map.insert("USER_VENDORCATEGORY".to_string(), value.to_string());
-            map.insert("TAG_VendorCategory".to_string(), value.to_string());
-        }
-        "fxname" => {
-            map.insert("USER_FXNAME".to_string(), value.to_string());
-            map.insert("TAG_FXName".to_string(), value.to_string());
-        }
-        "tracktitle" | "songtitle" => {
-            map.insert("USER_TRACKTITLE".to_string(), value.to_string());
-            map.insert("ASWG_songTitle".to_string(), value.to_string());
-            map.insert("STEINBERG_SmfSongName".to_string(), value.to_string());
-            map.insert("TAG_Title".to_string(), value.to_string());
-        }
-        "description" | "comment" => {
-            map.insert("BEXT_BWF_DESCRIPTION".to_string(), value.to_string());
-            map.insert("USER_DESCRIPTION".to_string(), value.to_string());
-            map.insert("STEINBERG_MediaComment".to_string(), value.to_string());
-            map.insert("TAG_Comment".to_string(), value.to_string());
-            map.insert("TAG_Description".to_string(), value.to_string());
-        }
-        "keywords" => {
-            map.insert("USER_KEYWORDS".to_string(), value.to_string());
-            map.insert("STEINBERG_MusicalInstrument".to_string(), value.to_string());
-            map.insert("TAG_Keywords".to_string(), value.to_string());
-        }
-        "manufacturer" | "originator" => {
-            map.insert("USER_MANUFACTURER".to_string(), value.to_string());
-            map.insert("TAG_Manufacturer".to_string(), value.to_string());
-            map.insert("TAG_Originator".to_string(), value.to_string());
-            map.insert("ASWG_originator".to_string(), value.to_string());
-            map.insert(
-                "STEINBERG_MediaLibraryManufacturerName".to_string(),
-                value.to_string(),
-            );
-            map.insert("BEXT_BWF_ORIGINATOR".to_string(), value.to_string());
-            map.insert(
-                "BEXT_BWF_ORIGINATOR_REFERENCE".to_string(),
-                value.to_string(),
-            );
-        }
-        "library" | "source" => {
-            map.insert("USER_LIBRARY".to_string(), value.to_string());
-            map.insert("USER_SOURCE".to_string(), value.to_string());
-            map.insert("ASWG_library".to_string(), value.to_string());
-            map.insert("STEINBERG_MediaLibrary".to_string(), value.to_string());
-            map.insert("TAG_Library".to_string(), value.to_string());
-        }
-        "designer" | "artist" => {
-            map.insert("USER_DESIGNER".to_string(), value.to_string());
-            map.insert("STEINBERG_AudioSoundEditor".to_string(), value.to_string());
-            map.insert("TAG_Artist".to_string(), value.to_string());
-            map.insert("TAG_Designer".to_string(), value.to_string());
-        }
-        "show" => {
-            map.insert("USER_SHOW".to_string(), value.to_string());
-            map.insert("TAG_Show".to_string(), value.to_string());
-        }
-        "recmedium" | "rec" | "recorder" => {
-            map.insert("USER_RECMEDIUM".to_string(), value.to_string());
-            map.insert("TAG_RecMedium".to_string(), value.to_string());
-        }
-        "microphone" | "mic" | "mictype" => {
-            map.insert("USER_MICROPHONE".to_string(), value.to_string());
-            map.insert("TAG_Microphone".to_string(), value.to_string());
-            map.insert("ASWG_micType".to_string(), value.to_string());
-            map.insert(
-                "STEINBERG_MediaRecordingMethod".to_string(),
-                value.to_string(),
-            );
-        }
-        "micperspective" | "mcperspective" => {
-            map.insert("USER_MICPERSPECTIVE".to_string(), value.to_string());
-            map.insert("TAG_MicPerspective".to_string(), value.to_string());
-        }
+        "catid" => &["USER_CATID", "ASWG_catId", "TAG_CatID"],
+        "category" => &[
+            "USER_CATEGORY",
+            "ASWG_category",
+            "STEINBERG_MediaCategoryPost",
+            "TAG_Genre",
+            "TAG_Category",
+        ],
+        "subcategory" => &[
+            "USER_SUBCATEGORY",
+            "ASWG_subCategory",
+            "STEINBERG_MusicalCategory",
+            "TAG_SubCategory",
+        ],
+        "categoryfull" => &["USER_CATEGORYFULL", "TAG_CategoryFull"],
+        "usercategory" => &["USER_USERCATEGORY", "ASWG_userCategory", "TAG_UserCategory"],
+        "vendorcategory" => &["USER_VENDORCATEGORY", "TAG_VendorCategory"],
+        "fxname" => &["USER_FXNAME", "TAG_FXName"],
+        "tracktitle" | "songtitle" => &[
+            "USER_TRACKTITLE",
+            "ASWG_songTitle",
+            "STEINBERG_SmfSongName",
+            "TAG_Title",
+        ],
+        "description" | "comment" => &[
+            "BEXT_BWF_DESCRIPTION",
+            "USER_DESCRIPTION",
+            "STEINBERG_MediaComment",
+            "TAG_Comment",
+            "TAG_Description",
+        ],
+        "keywords" => &[
+            "USER_KEYWORDS",
+            "STEINBERG_MusicalInstrument",
+            "TAG_Keywords",
+        ],
+        "manufacturer" | "originator" => &[
+            "USER_MANUFACTURER",
+            "TAG_Manufacturer",
+            "TAG_Originator",
+            "ASWG_originator",
+            "STEINBERG_MediaLibraryManufacturerName",
+            "BEXT_BWF_ORIGINATOR",
+            "BEXT_BWF_ORIGINATOR_REFERENCE",
+        ],
+        "library" | "source" => &[
+            "USER_LIBRARY",
+            "USER_SOURCE",
+            "ASWG_library",
+            "STEINBERG_MediaLibrary",
+            "TAG_Library",
+        ],
+        "designer" | "artist" => &[
+            "USER_DESIGNER",
+            "STEINBERG_AudioSoundEditor",
+            "TAG_Artist",
+            "TAG_Designer",
+        ],
+        "show" => &["USER_SHOW", "TAG_Show"],
+        "recmedium" | "rec" | "recorder" => &["USER_RECMEDIUM", "TAG_RecMedium"],
+        "microphone" | "mic" | "mictype" => &[
+            "USER_MICROPHONE",
+            "TAG_Microphone",
+            "ASWG_micType",
+            "STEINBERG_MediaRecordingMethod",
+        ],
+        "micperspective" | "mcperspective" => &["USER_MICPERSPECTIVE", "TAG_MicPerspective"],
 
-        "location" => {
-            map.insert("USER_LOCATION".to_string(), value.to_string());
-            map.insert("TAG_Location".to_string(), value.to_string());
-            map.insert(
-                "STEINBERG_MediaRecordingLocation".to_string(),
-                value.to_string(),
-            );
-        }
+        "location" => &[
+            "USER_LOCATION",
+            "TAG_Location",
+            "STEINBERG_MediaRecordingLocation",
+        ],
 
-        "releasedate" => {
-            map.insert("USER_RELEASEDATE".to_string(), value.to_string());
-            map.insert("ASWG_releaseDate".to_string(), value.to_string());
-            map.insert("TAG_RETAIL_DATE".to_string(), value.to_string());
-        }
+        "releasedate" => &["USER_RELEASEDATE", "ASWG_releaseDate", "TAG_RETAIL_DATE"],
 
-        "rating" => {
-            map.insert("USER_RATING".to_string(), value.to_string());
-            map.insert("TAG_Rating".to_string(), value.to_string());
-            map.insert("STEINBERG_MediaTrackNumber".to_string(), value.to_string());
-        }
+        "rating" => &["USER_RATING", "TAG_Rating", "STEINBERG_MediaTrackNumber"],
 
-        "embedder" => {
-            map.insert("USER_EMBEDDER".to_string(), value.to_string());
-            map.insert("TAG_Embedder".to_string(), value.to_string());
-            map.insert("BEXT_BWF_CODING_HISTORY".to_string(), value.to_string());
-        }
-        _ => {}
+        "embedder" => &["USER_EMBEDDER", "TAG_Embedder", "BEXT_BWF_CODING_HISTORY"],
+        _ => &[],
     }
 }
+
+// pub fn set_soundminer_metadata(key: &str, value: &str, map: &mut HashMap<String, String>) {
+//     match key
+//         .strip_prefix("USER_")
+//         .unwrap_or(key)
+//         .strip_prefix("ASWG_")
+//         .unwrap_or(key)
+//         .strip_prefix("BEXT_")
+//         .unwrap_or(key)
+//         .strip_prefix("STEINBERG_")
+//         .unwrap_or(key)
+//         .strip_prefix("VORBIS_")
+//         .unwrap_or(key)
+//         .strip_prefix("WV_")
+//         .unwrap_or(key)
+//         .strip_prefix("TAG_")
+//         .unwrap_or(key)
+//         .to_lowercase()
+//         .replace([' ', '_', '-', '.'], "")
+//         .as_str()
+//     {
+//         "catid" => { &[
+//             "USER_CATID",
+//             "ASWG_catId",
+//             "TAG_CatID",
+//        ]}
+//         "category" => { &[
+//             "USER_CATEGORY",
+//             "ASWG_category",
+//             "STEINBERG_MediaCategoryPost",
+//             "TAG_Genre",
+//             "TAG_Category",
+//        ]}
+//         "subcategory" => { &[
+//             "USER_SUBCATEGORY",
+//             "ASWG_subCategory",
+//             "STEINBERG_MusicalCategory",
+//             "TAG_SubCategory",
+//        ]}
+//         "categoryfull" => { &[
+//             "USER_CATEGORYFULL",
+//             "TAG_CategoryFull",
+//        ]}
+//         "usercategory" => { &[
+//             "USER_USERCATEGORY",
+//             "ASWG_userCategory",
+//             "TAG_UserCategory",
+//        ]}
+//         "vendorcategory" => { &[
+//             "USER_VENDORCATEGORY",
+//             "TAG_VendorCategory",
+//        ]}
+//         "fxname" => { &[
+//             "USER_FXNAME",
+//             "TAG_FXName",
+//        ]}
+//         "tracktitle" | "songtitle" => { &[
+//             "USER_TRACKTITLE",
+//             "ASWG_songTitle",
+//             "STEINBERG_SmfSongName",
+//             "TAG_Title",
+//        ]}
+//         "description" | "comment" => { &[
+//             "BEXT_BWF_DESCRIPTION",
+//             "USER_DESCRIPTION",
+//             "STEINBERG_MediaComment",
+//             "TAG_Comment",
+//             "TAG_Description",
+//        ]}
+//         "keywords" => { &[
+//             "USER_KEYWORDS",
+//             "STEINBERG_MusicalInstrument",
+//             "TAG_Keywords",
+//        ]}
+//         "manufacturer" | "originator" => { &[
+//             "USER_MANUFACTURER",
+//             "TAG_Manufacturer",
+//             "TAG_Originator",
+//             "ASWG_originator",
+
+//                 "STEINBERG_MediaLibraryManufacturerName".to_string(),
+//                 value.to_string(),
+//             );
+//             "BEXT_BWF_ORIGINATOR",
+
+//                 "BEXT_BWF_ORIGINATOR_REFERENCE".to_string(),
+//                 value.to_string(),
+//             );
+//        ]}
+//         "library" | "source" => { &[
+//             "USER_LIBRARY",
+//             "USER_SOURCE",
+//             "ASWG_library",
+//             "STEINBERG_MediaLibrary",
+//             "TAG_Library",
+//        ]}
+//         "designer" | "artist" => { &[
+//             "USER_DESIGNER",
+//             "STEINBERG_AudioSoundEditor",
+//             "TAG_Artist",
+//             "TAG_Designer",
+//        ]}
+//         "show" => { &[
+//             "USER_SHOW",
+//             "TAG_Show",
+//        ]}
+//         "recmedium" | "rec" | "recorder" => { &[
+//             "USER_RECMEDIUM",
+//             "TAG_RecMedium",
+//        ]}
+//         "microphone" | "mic" | "mictype" => { &[
+//             "USER_MICROPHONE",
+//             "TAG_Microphone",
+//             "ASWG_micType",
+
+//                 "STEINBERG_MediaRecordingMethod".to_string(),
+//                 value.to_string(),
+//             );
+//        ]}
+//         "micperspective" | "mcperspective" => { &[
+//             "USER_MICPERSPECTIVE",
+//             "TAG_MicPerspective",
+//        ]}
+
+//         "location" => { &[
+//             "USER_LOCATION",
+//             "TAG_Location",
+
+//                 "STEINBERG_MediaRecordingLocation".to_string(),
+//                 value.to_string(),
+//             );
+//        ]}
+
+//         "releasedate" => { &[
+//             "USER_RELEASEDATE",
+//             "ASWG_releaseDate",
+//             "TAG_RETAIL_DATE",
+//        ]}
+
+//         "rating" => { &[
+//             "USER_RATING",
+//             "TAG_Rating",
+//             "STEINBERG_MediaTrackNumber",
+//        ]}
+
+//         "embedder" => { &[
+//             "USER_EMBEDDER",
+//             "TAG_Embedder",
+//             "BEXT_BWF_CODING_HISTORY",
+//        ]}
+//         _ => { &[}
+//    ]}
+// }

@@ -12,6 +12,16 @@ use memmap2::MmapOptions;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
+use std::io::Cursor;
+
+/// Source format types for wrapper generation
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SourceFormat {
+    WAV,
+    FLAC,
+    AIFF,
+    Unknown,
+}
 
 /// Safe wrapper around WavPack context for decoding
 pub struct WavpackDecoder {
@@ -665,9 +675,10 @@ impl Codec for WvCodec {
                         if item_name.to_uppercase() == "IXML" {
                             metadata.parse_ixml(&value)?;
                         } else {
-                            // Map common WavPack tag names to standard names
+                            // Map common WavPack tag names to standard names with TAG_ prefix
                             let standard_key = self.normalize_wavpack_key(&item_name);
-                            metadata.set_field(&standard_key, &value)?;
+                            let prefixed_key = format!("TAG_{}", standard_key);
+                            metadata.set_field(&prefixed_key, &value)?;
                         }
                     }
                 }
@@ -731,17 +742,35 @@ impl Codec for WvCodec {
             }
         }
 
-        // Add wrapper information if available
+        // Parse wrapper data if available - this contains embedded format metadata
         let wrapper_bytes = unsafe { WavpackGetWrapperBytes(decoder.context) };
         if wrapper_bytes > 0 {
             let wrapper_data = unsafe { WavpackGetWrapperData(decoder.context) };
             if !wrapper_data.is_null() {
-                let _wrapper_slice =
+                let wrapper_slice =
                     unsafe { std::slice::from_raw_parts(wrapper_data, wrapper_bytes as usize) };
-                // Store wrapper data as a field for now
-                metadata.set_field("WavpackWrapper", &format!("{} bytes", wrapper_bytes))?;
+                
+                dprintln!(
+                    "WavPack parse_metadata: Found wrapper data ({} bytes), parsing embedded metadata...",
+                    wrapper_bytes
+                );
+                
+                // Store the raw wrapper data for perfect re-embedding (as hex)
+                let wrapper_hex = wrapper_slice.iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>();
+                metadata.set_field("WAVPACK_WRAPPER_DATA", &wrapper_hex)?;
+                metadata.set_field("WAVPACK_WRAPPER_SIZE", &wrapper_bytes.to_string())?;
+                
+                // Parse the wrapper data as the original format's metadata
+                if let Err(e) = self.parse_wrapper_metadata(&mut metadata, wrapper_slice) {
+                    dprintln!("WavPack parse_metadata: Warning - failed to parse wrapper metadata: {}", e);
+                }
             }
         }
+
+        // Extract additional WavPack-specific metadata
+        self.extract_wavpack_technical_metadata(&mut metadata, &decoder)?;
 
         Ok(metadata)
     }
@@ -795,40 +824,621 @@ impl Codec for WvCodec {
 }
 
 impl WvCodec {
+    /// Parse embedded metadata from WavPack wrapper data
+    fn parse_wrapper_metadata(&self, metadata: &mut Metadata, wrapper_data: &[u8]) -> R<()> {
+        if wrapper_data.len() < 8 {
+            return Ok(());
+        }
+
+        // WavPack wrapper data typically contains the original format's chunks
+        // Try to identify the format and parse accordingly
+        
+        // Check for WAV format wrapper (RIFF/WAVE)
+        if wrapper_data.len() >= 12 && 
+           &wrapper_data[0..4] == b"RIFF" && 
+           &wrapper_data[8..12] == b"WAVE" {
+            dprintln!("WavPack parse_wrapper_metadata: Found WAV wrapper data");
+            return self.parse_wav_wrapper_chunks(metadata, wrapper_data);
+        }
+        
+        // Check for AIFF format wrapper (FORM/AIFF)
+        if wrapper_data.len() >= 12 && 
+           &wrapper_data[0..4] == b"FORM" && 
+           &wrapper_data[8..12] == b"AIFF" {
+            dprintln!("WavPack parse_wrapper_metadata: Found AIFF wrapper data");
+            return self.parse_aiff_wrapper_chunks(metadata, wrapper_data);
+        }
+        
+        // Try to parse as generic chunks
+        dprintln!("WavPack parse_wrapper_metadata: Parsing as generic chunk data");
+        self.parse_generic_wrapper_chunks(metadata, wrapper_data)
+    }
+
+    /// Parse WAV format wrapper chunks
+    fn parse_wav_wrapper_chunks(&self, metadata: &mut Metadata, data: &[u8]) -> R<()> {
+        let mut cursor = Cursor::new(data);
+        cursor.set_position(12); // Skip RIFF/WAVE header
+
+        while cursor.position() + 8 <= data.len() as u64 {
+            let pos = cursor.position() as usize;
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+            
+            if pos + 8 + chunk_size as usize > data.len() {
+                break;
+            }
+            
+            let chunk_data = &data[pos + 8..pos + 8 + chunk_size as usize];
+            
+            match chunk_id {
+                b"bext" => {
+                    dprintln!("WavPack wrapper: Found BWF bext chunk");
+                    metadata.parse_bext(chunk_data)?;
+                }
+                b"iXML" => {
+                    dprintln!("WavPack wrapper: Found iXML chunk");
+                    let xml_str = String::from_utf8_lossy(chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
+                }
+                b"ID3 " | b"id3 " => {
+                    dprintln!("WavPack wrapper: Found ID3 chunk");
+                    metadata.parse_id3(chunk_data)?;
+                }
+                b"LIST" => {
+                    if chunk_size >= 4 && &chunk_data[0..4] == b"INFO" {
+                        dprintln!("WavPack wrapper: Found LIST INFO chunk");
+                        self.parse_list_info_chunk(metadata, &chunk_data[4..])?;
+                    }
+                }
+                _ => {
+                    // Store unknown chunks for debugging
+                    let chunk_name = String::from_utf8_lossy(chunk_id);
+                    if chunk_name.chars().all(|c| c.is_ascii_graphic()) {
+                        dprintln!("WavPack wrapper: Found chunk '{}' ({} bytes)", chunk_name, chunk_size);
+                    }
+                }
+            }
+            
+            cursor.set_position(pos as u64 + 8 + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1); // Padding
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Parse AIFF format wrapper chunks  
+    fn parse_aiff_wrapper_chunks(&self, metadata: &mut Metadata, data: &[u8]) -> R<()> {
+        let mut cursor = Cursor::new(data);
+        cursor.set_position(12); // Skip FORM/AIFF header
+
+        while cursor.position() + 8 <= data.len() as u64 {
+            let pos = cursor.position() as usize;
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+            
+            if pos + 8 + chunk_size as usize > data.len() {
+                break;
+            }
+            
+            let chunk_data = &data[pos + 8..pos + 8 + chunk_size as usize];
+            
+            match chunk_id {
+                b"iXML" => {
+                    dprintln!("WavPack wrapper: Found AIFF iXML chunk");
+                    let xml_str = String::from_utf8_lossy(chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
+                }
+                b"ID3 " | b"id3 " => {
+                    dprintln!("WavPack wrapper: Found AIFF ID3 chunk");
+                    metadata.parse_id3(chunk_data)?;
+                }
+                _ => {
+                    let chunk_name = String::from_utf8_lossy(chunk_id);
+                    if chunk_name.chars().all(|c| c.is_ascii_graphic()) {
+                        dprintln!("WavPack wrapper: Found AIFF chunk '{}' ({} bytes)", chunk_name, chunk_size);
+                    }
+                }
+            }
+            
+            cursor.set_position(pos as u64 + 8 + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1); // Padding
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Parse generic wrapper chunks
+    fn parse_generic_wrapper_chunks(&self, metadata: &mut Metadata, data: &[u8]) -> R<()> {
+        // Try to find iXML or ID3 data within the wrapper
+        let data_str = String::from_utf8_lossy(data);
+        
+        // Look for iXML content
+        if let Some(start) = data_str.find("<BWFXML>") {
+            if let Some(end) = data_str.find("</BWFXML>") {
+                let ixml_content = &data_str[start..end + 9];
+                dprintln!("WavPack wrapper: Found embedded iXML content");
+                metadata.parse_ixml(ixml_content)?;
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Extract WavPack-specific technical metadata
+    fn extract_wavpack_technical_metadata(&self, metadata: &mut Metadata, decoder: &WavpackDecoder) -> R<()> {
+        // Get file format information
+        let mode = unsafe { WavpackGetMode(decoder.context) };
+        metadata.set_field("WAVPACK_MODE", &format!("{:#x}", mode))?;
+        
+        // Check various format flags
+        if (mode & MODE_LOSSLESS) != 0 {
+            metadata.set_field("WAVPACK_LOSSLESS", "true")?;
+        }
+        if (mode & MODE_HYBRID) != 0 {
+            metadata.set_field("WAVPACK_HYBRID", "true")?;
+        }
+        if (mode & MODE_FLOAT) != 0 {
+            metadata.set_field("WAVPACK_FLOAT", "true")?;
+        }
+        if (mode & MODE_HIGH) != 0 {
+            metadata.set_field("WAVPACK_HIGH_QUALITY", "true")?;
+        }
+        if (mode & MODE_FAST) != 0 {
+            metadata.set_field("WAVPACK_FAST_MODE", "true")?;
+        }
+        
+        // Get version information
+        let version = unsafe { WavpackGetVersion(decoder.context) };
+        metadata.set_field("WAVPACK_VERSION", &version.to_string())?;
+        
+        // Get file size information
+        let file_size = unsafe { WavpackGetFileSize64(decoder.context) };
+        if file_size > 0 {
+            metadata.set_field("WAVPACK_FILE_SIZE", &file_size.to_string())?;
+        }
+        
+        // Get ratio information (compression ratio)
+        let ratio = unsafe { WavpackGetRatio(decoder.context) };
+        if ratio > 0.0 {
+            metadata.set_field("WAVPACK_COMPRESSION_RATIO", &format!("{:.3}", ratio))?;
+        }
+        
+        // Get average bitrate
+        let avg_bitrate = unsafe { WavpackGetAverageBitrate(decoder.context, 0) };
+        if avg_bitrate > 0.0 {
+            metadata.set_field("WAVPACK_AVERAGE_BITRATE", &avg_bitrate.to_string())?;
+        }
+        
+        // Get instantaneous bitrate at different positions
+        let instant_bitrate = unsafe { WavpackGetInstantBitrate(decoder.context) };
+        if instant_bitrate > 0.0 {
+            metadata.set_field("WAVPACK_INSTANT_BITRATE", &instant_bitrate.to_string())?;
+        }
+        
+        // Get MD5 checksum if available
+        let mut md5_sum = [0u8; 16];
+        let has_md5 = unsafe { WavpackGetMD5Sum(decoder.context, md5_sum.as_mut_ptr()) };
+        if has_md5 != 0 {
+            let md5_hex = md5_sum.iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+            metadata.set_field("WAVPACK_MD5", &md5_hex)?;
+        }
+        
+        // Get channel mask if available
+        let channel_mask = unsafe { WavpackGetChannelMask(decoder.context) };
+        if channel_mask != 0 {
+            metadata.set_field("WAVPACK_CHANNEL_MASK", &format!("{:#x}", channel_mask))?;
+        }
+        
+        // Check for lossy blocks
+        let num_errors = unsafe { WavpackGetNumErrors(decoder.context) };
+        if num_errors > 0 {
+            metadata.set_field("WAVPACK_DECODE_ERRORS", &num_errors.to_string())?;
+        }
+        
+        dprintln!(
+            "WavPack technical metadata: mode={:#x}, version={}, ratio={:.3}, bitrate={}",
+            mode, version, ratio, avg_bitrate
+        );
+        
+        Ok(())
+    }
+
+    /// Generate wrapper data from metadata when converting from non-WavPack sources
+    fn generate_wrapper_data_from_metadata(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        // Detect source format from metadata patterns
+        let source_format = self.detect_source_format(metadata);
+        
+        match source_format {
+            SourceFormat::WAV => self.generate_wav_wrapper(metadata),
+            SourceFormat::FLAC => self.generate_flac_wrapper(metadata),
+            SourceFormat::AIFF => self.generate_aiff_wrapper(metadata),
+            SourceFormat::Unknown => self.generate_generic_wrapper(metadata),
+        }
+    }
+
+    /// Detect source format from metadata patterns
+    fn detect_source_format(&self, metadata: &Metadata) -> SourceFormat {
+        let fields = metadata.get_all_fields();
+        
+        // Check for format-specific field patterns
+        if fields.keys().any(|k| k.starts_with("BEXT_") || k.starts_with("INFO_")) {
+            SourceFormat::WAV
+        } else if fields.keys().any(|k| k.contains("VORBIS") || k.contains("FLAC")) {
+            SourceFormat::FLAC
+        } else if fields.keys().any(|k| k.contains("AIFF") || k.contains("FORM")) {
+            SourceFormat::AIFF
+        } else {
+            SourceFormat::Unknown
+        }
+    }
+
+    /// Generate WAV-style wrapper data
+    fn generate_wav_wrapper(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        let mut wrapper = Vec::new();
+        
+        // Create RIFF/WAVE header
+        wrapper.extend_from_slice(b"RIFF");
+        wrapper.extend_from_slice(&0u32.to_le_bytes()); // Size placeholder
+        wrapper.extend_from_slice(b"WAVE");
+        
+        let mut total_size = 4; // WAVE
+        
+        // Add BWF bext chunk if we have BEXT fields
+        if let Some(bext_chunk) = self.create_bext_chunk(metadata)? {
+            wrapper.extend_from_slice(b"bext");
+            wrapper.extend_from_slice(&(bext_chunk.len() as u32).to_le_bytes());
+            wrapper.extend_from_slice(&bext_chunk);
+            total_size += 8 + bext_chunk.len();
+            
+            // Add padding if needed
+            if bext_chunk.len() % 2 == 1 {
+                wrapper.push(0);
+                total_size += 1;
+            }
+        }
+        
+        // Add iXML chunk
+        let ixml_content = self.create_ixml(metadata)?;
+        if !ixml_content.is_empty() {
+            wrapper.extend_from_slice(b"iXML");
+            wrapper.extend_from_slice(&(ixml_content.len() as u32).to_le_bytes());
+            wrapper.extend_from_slice(ixml_content.as_bytes());
+            total_size += 8 + ixml_content.len();
+            
+            // Add padding if needed
+            if ixml_content.len() % 2 == 1 {
+                wrapper.push(0);
+                total_size += 1;
+            }
+        }
+        
+        // Add LIST INFO chunk if we have INFO fields
+        if let Some(list_chunk) = self.create_list_info_chunk(metadata)? {
+            wrapper.extend_from_slice(b"LIST");
+            wrapper.extend_from_slice(&(list_chunk.len() as u32).to_le_bytes());
+            wrapper.extend_from_slice(&list_chunk);
+            total_size += 8 + list_chunk.len();
+            
+            // Add padding if needed
+            if list_chunk.len() % 2 == 1 {
+                wrapper.push(0);
+                total_size += 1;
+            }
+        }
+        
+        // Update RIFF size
+        let riff_size = (total_size + 4) as u32; // +4 for the size field itself
+        wrapper[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        
+        dprintln!("Generated WAV wrapper: {} bytes", wrapper.len());
+        Ok(wrapper)
+    }
+
+    /// Generate FLAC-style wrapper data (minimal)
+    fn generate_flac_wrapper(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        // For FLAC sources, create a minimal iXML-only wrapper
+        let ixml_content = self.create_ixml(metadata)?;
+        if ixml_content.is_empty() {
+            return Ok(Vec::new());
+        }
+        
+        dprintln!("Generated FLAC wrapper: iXML only ({} bytes)", ixml_content.len());
+        Ok(ixml_content.into_bytes())
+    }
+
+    /// Generate AIFF-style wrapper data
+    fn generate_aiff_wrapper(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        let mut wrapper = Vec::new();
+        
+        // Create FORM/AIFF header
+        wrapper.extend_from_slice(b"FORM");
+        wrapper.extend_from_slice(&0u32.to_be_bytes()); // Size placeholder
+        wrapper.extend_from_slice(b"AIFF");
+        
+        let mut total_size = 4; // AIFF
+        
+        // Add iXML chunk
+        let ixml_content = self.create_ixml(metadata)?;
+        if !ixml_content.is_empty() {
+            wrapper.extend_from_slice(b"iXML");
+            wrapper.extend_from_slice(&(ixml_content.len() as u32).to_be_bytes());
+            wrapper.extend_from_slice(ixml_content.as_bytes());
+            total_size += 8 + ixml_content.len();
+            
+            // Add padding if needed
+            if ixml_content.len() % 2 == 1 {
+                wrapper.push(0);
+                total_size += 1;
+            }
+        }
+        
+        // Update FORM size
+        let form_size = (total_size + 4) as u32;
+        wrapper[4..8].copy_from_slice(&form_size.to_be_bytes());
+        
+        dprintln!("Generated AIFF wrapper: {} bytes", wrapper.len());
+        Ok(wrapper)
+    }
+
+    /// Generate generic wrapper data
+    fn generate_generic_wrapper(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        // For unknown formats, just create iXML content
+        let ixml_content = self.create_ixml(metadata)?;
+        dprintln!("Generated generic wrapper: {} bytes", ixml_content.len());
+        Ok(ixml_content.into_bytes())
+    }
+
+    /// Create BWF bext chunk data
+    fn create_bext_chunk(&self, metadata: &Metadata) -> R<Option<Vec<u8>>> {
+        let fields = metadata.get_all_fields();
+        let has_bext_fields = fields.keys().any(|k| k.starts_with("BEXT_"));
+        
+        if !has_bext_fields {
+            return Ok(None);
+        }
+        
+        let mut bext = vec![0u8; 602]; // Standard bext size
+        
+        // Description (256 bytes)
+        if let Some(desc) = metadata.get_field("BEXT_BWF_DESCRIPTION") {
+            let desc_bytes = desc.as_bytes();
+            let copy_len = std::cmp::min(desc_bytes.len(), 255);
+            bext[0..copy_len].copy_from_slice(&desc_bytes[0..copy_len]);
+        }
+        
+        // Originator (32 bytes at offset 256)
+        if let Some(orig) = metadata.get_field("BEXT_ORIGINATOR") {
+            let orig_bytes = orig.as_bytes();
+            let copy_len = std::cmp::min(orig_bytes.len(), 31);
+            bext[256..256 + copy_len].copy_from_slice(&orig_bytes[0..copy_len]);
+        }
+        
+        // Add other BEXT fields as needed...
+        
+        dprintln!("Created bext chunk: {} bytes", bext.len());
+        Ok(Some(bext))
+    }
+
+    /// Create LIST INFO chunk data
+    fn create_list_info_chunk(&self, metadata: &Metadata) -> R<Option<Vec<u8>>> {
+        let fields = metadata.get_all_fields();
+        let info_fields: Vec<(&String, &String)> = fields.iter()
+            .filter(|(k, _)| k.starts_with("INFO_"))
+            .collect();
+        
+        if info_fields.is_empty() {
+            return Ok(None);
+        }
+        
+        let mut list_data = Vec::new();
+        list_data.extend_from_slice(b"INFO");
+        
+        for (key, value) in info_fields {
+            let chunk_id = &key[5..]; // Remove "INFO_" prefix
+            if chunk_id.len() == 4 {
+                list_data.extend_from_slice(chunk_id.as_bytes());
+                list_data.extend_from_slice(&(value.len() as u32).to_le_bytes());
+                list_data.extend_from_slice(value.as_bytes());
+                
+                // Add null terminator and padding
+                if value.len() % 2 == 1 {
+                    list_data.push(0);
+                }
+            }
+        }
+        
+        dprintln!("Created LIST INFO chunk: {} bytes", list_data.len());
+        Ok(Some(list_data))
+    }
+
+    /// Parse LIST INFO chunk from WAV wrapper
+    fn parse_list_info_chunk(&self, metadata: &mut Metadata, data: &[u8]) -> R<()> {
+        let mut cursor = Cursor::new(data);
+        
+        while cursor.position() + 8 <= data.len() as u64 {
+            let pos = cursor.position() as usize;
+            let chunk_id = &data[pos..pos + 4];
+            let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+            
+            if pos + 8 + chunk_size as usize > data.len() {
+                break;
+            }
+            
+            let chunk_data = &data[pos + 8..pos + 8 + chunk_size as usize];
+            let text_value = String::from_utf8_lossy(chunk_data)
+                .trim_end_matches('\0')
+                .trim()
+                .to_string();
+            
+            if !text_value.is_empty() {
+                let chunk_name = String::from_utf8_lossy(chunk_id);
+                let field_name = format!("INFO_{}", chunk_name);
+                dprintln!("WavPack wrapper: Found LIST INFO '{}' = '{}'", chunk_name, text_value);
+                metadata.set_field(&field_name, &text_value)?;
+            }
+            
+            cursor.set_position(pos as u64 + 8 + chunk_size as u64);
+            if chunk_size % 2 == 1 {
+                cursor.set_position(cursor.position() + 1); // Padding
+            }
+        }
+        
+        Ok(())
+    }
+
     /// Add metadata to encoder before encoding
     fn add_metadata_to_encoder(&self, encoder: &mut WavpackEncoder, metadata: &Metadata) -> R<()> {
         if encoder.context.is_null() {
             return Err(anyhow!("Encoder not initialized"));
         }
 
+        // First, restore wrapper data if available, or generate it from source format
+        if let Some(wrapper_hex) = metadata.get_field("WAVPACK_WRAPPER_DATA") {
+            // We have existing WavPack wrapper data - restore it
+            if let Some(wrapper_size_str) = metadata.get_field("WAVPACK_WRAPPER_SIZE") {
+                if let Ok(wrapper_size) = wrapper_size_str.parse::<usize>() {
+                    // Convert hex string back to bytes
+                    let mut wrapper_data = Vec::with_capacity(wrapper_size);
+                    for chunk in wrapper_hex.as_bytes().chunks(2) {
+                        if chunk.len() == 2 {
+                            let hex_str = std::str::from_utf8(chunk).unwrap_or("00");
+                            if let Ok(byte_val) = u8::from_str_radix(hex_str, 16) {
+                                wrapper_data.push(byte_val);
+                            }
+                        }
+                    }
+                    
+                    if wrapper_data.len() == wrapper_size {
+                        dprintln!("WavPack embed: Restoring {} bytes of wrapper data", wrapper_size);
+                        
+                        // Use WavPack API to restore wrapper data
+                        let result = unsafe {
+                            WavpackAddWrapper(
+                                encoder.context,
+                                wrapper_data.as_ptr() as *mut c_void,
+                                wrapper_size as uint32_t,
+                            )
+                        };
+                        
+                        if result != 0 {
+                            dprintln!("WavPack embed: Successfully restored wrapper data");
+                        } else {
+                            dprintln!("WavPack embed: Warning - failed to restore wrapper data");
+                        }
+                    } else {
+                        dprintln!("WavPack embed: Warning - wrapper data size mismatch: {} vs {}", wrapper_data.len(), wrapper_size);
+                    }
+                }
+            }
+        } else {
+            // No existing wrapper data - generate it from source format metadata
+            dprintln!("WavPack embed: No wrapper data found, generating from source format metadata");
+            
+            if let Ok(generated_wrapper) = self.generate_wrapper_data_from_metadata(metadata) {
+                if !generated_wrapper.is_empty() {
+                    dprintln!("WavPack embed: Generated {} bytes of wrapper data", generated_wrapper.len());
+                    
+                    let result = unsafe {
+                        WavpackAddWrapper(
+                            encoder.context,
+                            generated_wrapper.as_ptr() as *mut c_void,
+                            generated_wrapper.len() as uint32_t,
+                        )
+                    };
+                    
+                    if result != 0 {
+                        dprintln!("WavPack embed: Successfully added generated wrapper data");
+                    } else {
+                        dprintln!("WavPack embed: Warning - failed to add generated wrapper data");
+                    }
+                }
+            }
+        }
+
+        // Restore MD5 checksum if available
+        if let Some(md5_hex) = metadata.get_field("WAVPACK_MD5") {
+            if md5_hex.len() == 32 { // 16 bytes * 2 chars per byte
+                let mut md5_bytes = [0u8; 16];
+                let mut hex_valid = true;
+                
+                for (i, chunk) in md5_hex.as_bytes().chunks(2).enumerate() {
+                    if i >= 16 { break; }
+                    if chunk.len() == 2 {
+                        let hex_str = std::str::from_utf8(chunk).unwrap_or("00");
+                        if let Ok(byte_val) = u8::from_str_radix(hex_str, 16) {
+                            md5_bytes[i] = byte_val;
+                        } else {
+                            hex_valid = false;
+                            break;
+                        }
+                    }
+                }
+                
+                if hex_valid {
+                    let result = unsafe {
+                        WavpackStoreMD5Sum(encoder.context, md5_bytes.as_mut_ptr())
+                    };
+                    
+                    if result != 0 {
+                        dprintln!("WavPack embed: Successfully restored MD5 checksum");
+                    } else {
+                        dprintln!("WavPack embed: Warning - failed to restore MD5 checksum");
+                    }
+                }
+            }
+        }
+
         // Add text fields from the hashmap
         for (key, value) in metadata.get_all_fields().iter() {
-            let wavpack_key = self.map_to_wavpack_key(key);
+            // Skip internal WavPack metadata fields
+            if key.starts_with("WAVPACK_") {
+                continue;
+            }
+            
+            // Check if this is a TAG_ prefixed key (from embedded text tags)
+            let wavpack_key = if let Some(unprefixed_key) = key.strip_prefix("TAG_") {
+                // Remove TAG_ prefix and map the remaining key to WavPack format
+                self.map_to_wavpack_key(unprefixed_key)
+            } else if key.starts_with("INFO_") {
+                // Handle WAV LIST INFO chunks from wrapper data
+                continue; // These are handled by wrapper data restoration
+            } else {
+                // This is likely an iXML field, skip it here as it will be handled in iXML creation
+                continue;
+            };
+            
             let c_key =
                 CString::new(wavpack_key.as_str()).map_err(|_| anyhow!("Invalid metadata key"))?;
+            let trimmed_value = value.trim();
             let c_value =
-                CString::new(value.as_str()).map_err(|_| anyhow!("Invalid metadata value"))?;
+                CString::new(trimmed_value).map_err(|_| anyhow!("Invalid metadata value"))?;
 
             let result = unsafe {
                 WavpackAppendTagItem(
                     encoder.context,
                     c_key.as_ptr(),
                     c_value.as_ptr(),
-                    value.len() as c_int,
+                    trimmed_value.len() as c_int,
                 )
             };
 
             if result != 1 {
                 dprintln!(
                     "Warning: Failed to add text tag '{}' - result: {}",
-                    key,
+                    wavpack_key,
                     result
                 );
             } else {
                 dprintln!(
                     "Successfully added text tag '{}' with value '{}'",
-                    key,
-                    value
+                    wavpack_key,
+                    trimmed_value
                 );
             }
         }
@@ -929,38 +1539,16 @@ impl WvCodec {
 
     /// Map standard metadata field names to WavPack tag names
     fn map_to_wavpack_key(&self, key: &str) -> String {
+        // Preserve original case for Soundminer compatibility
         match key {
-            "Title" => "TITLE".to_string(),
-            "Artist" => "ARTIST".to_string(),
-            "Album" => "ALBUM".to_string(),
-            "Year" => "DATE".to_string(),
-            "Genre" => "GENRE".to_string(),
-            "Track" => "TRACKNUMBER".to_string(),
-            "AlbumArtist" => "ALBUMARTIST".to_string(),
-            "Composer" => "COMPOSER".to_string(),
-            "Conductor" => "CONDUCTOR".to_string(),
-            "Comment" => "COMMENT".to_string(),
-            "Description" => "DESCRIPTION".to_string(),
-            "DiscNumber" => "DISCNUMBER".to_string(),
-            "Publisher" => "ORGANIZATION".to_string(),
-            "Copyright" => "COPYRIGHT".to_string(),
-            "ISRC" => "ISRC".to_string(),
-            "EncodingSettings" => "ENCODER".to_string(),
-            "Language" => "LANGUAGE".to_string(),
-            "Performer" => "PERFORMER".to_string(),
-            // For any other keys, use uppercase (WavPack convention)
-            // But preserve WAV-specific prefixed fields for cross-format compatibility
-            _ => {
-                if key.starts_with("USER_")
-                    || key.starts_with("BEXT_")
-                    || key.starts_with("ASWG_")
-                    || key.starts_with("STEINBERG_")
-                {
-                    key.to_string()
-                } else {
-                    key.to_uppercase()
-                }
-            }
+            "Year" => "Date".to_string(),
+            "Track" => "TrackNumber".to_string(),
+            "DiscNumber" => "DiscNumber".to_string(),
+            "Publisher" => "Organization".to_string(),
+            "EncodingSettings" => "Encoder".to_string(),
+            // For most keys, preserve the original case as it appears in TAG_ prefix
+            // This ensures Soundminer can read the metadata correctly
+            _ => key.to_string(),
         }
     }
 }

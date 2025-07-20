@@ -62,8 +62,10 @@ impl Metadata {
                 }
                 _ => {
                     let r: Vec<&str> = line.split(['<', '>']).collect();
-                    key = Some(r[1].trim().to_string());
-                    val = Some(r[2].trim().to_string());
+                    if r.len() >= 3 {
+                        key = Some(r[1].trim().to_string());
+                        val = Some(r[2].trim().to_string());
+                    }
                 }
             }
 
@@ -123,9 +125,17 @@ pub fn create_ixml_from_metadata(metadata: &Metadata) -> R<String> {
 }
 
 pub fn xml_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    // Check if the text is already XML-escaped to avoid double-encoding
+    if text.contains("&amp;") || text.contains("&lt;") || text.contains("&gt;") || 
+       text.contains("&quot;") || text.contains("&apos;") {
+        // Text appears to already be XML-escaped, return as-is
+        text.to_string()
+    } else {
+        // Apply XML escaping
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
 }

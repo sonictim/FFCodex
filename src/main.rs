@@ -6,9 +6,15 @@ fn main() -> R<()> {
     let version = bindings::chromaprint_bindings::get_version();
     let start_time = std::time::Instant::now();
     println!("Chromaprint version: {}", version);
+    // strip_soundminer_metadata(file_path)
 
     // Get input file from command line arguments
     let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR.wv";
+    let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
+
+    // Test the strip_soundminer_metadata function
+    // println!("Testing SMED stripping on reference file...");
+    // strip_soundminer_metadata("/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR.aif")?;
 
     // clean_multi_mono(input_file)?;
 
@@ -16,16 +22,14 @@ fn main() -> R<()> {
     let data = get_basic_metadata(input_file)?;
     println!("Basic metadata: {:?}", data);
 
-    let fp = get_fingerprint(input_file)?;
-    println!("Fingerprint: {}", fp);
+    // let fp = get_fingerprint(input_file)?;
+    // println!("Fingerprint: {}", fp);
 
-    let elapsed_time = start_time.elapsed();
-    println!(
-        "Finished fingerprinting  in {} seconds",
-        elapsed_time.as_secs_f32()
-    );
-
-    let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
+    // let elapsed_time = start_time.elapsed();
+    // println!(
+    //     "Finished fingerprinting  in {} seconds",
+    //     elapsed_time.as_secs_f32()
+    // );
 
     // // flac_debug(input_file)?;
 
@@ -49,6 +53,7 @@ fn main() -> R<()> {
     c.set_metadata_field("USER_CATID", "METLFric")?;
     c.set_metadata_field("USER_LOCATION", "Frisco, TX")?;
     c.set_metadata_field("USER_KEYWORDS", "metal friction squeaks")?;
+    c.set_metadata_field("USER_FXNAME", "Metal Friction FX Name")?;
 
     println!(
         "AFTER SET: USER_DESIGNER = {:?}",

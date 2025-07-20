@@ -7,7 +7,8 @@
       "Bash(ls:*)",
       "Bash(cargo build:*)",
       "Bash(cargo run:*)",
-      "Bash(xxd:*)"
+      "Bash(xxd:*)",
+      "Bash(wvtag:*)"
     ],
     "deny": []
   }

@@ -20,6 +20,12 @@ const IXML_CHUNK_ID: &[u8; 4] = b"iXML";
 const HEADER_SIZE: usize = 12; // FORM + size + AIFF
 const MIN_VALID_FILE_SIZE: usize = 12;
 
+// Sample conversion constants
+const I16_MAX_F: f32 = 32767.0;
+const I24_MAX_F: f32 = 8388607.0;
+const I32_MAX_F: f32 = 2147483647.0;
+const BYTE_MASK: i32 = 0xFF;
+
 pub struct AifCodec;
 
 impl Codec for AifCodec {
@@ -404,7 +410,7 @@ impl Codec for AifCodec {
                     let name_str = String::from_utf8_lossy(chunk_data);
                     let name = name_str.trim_end_matches('\0').trim();
                     if !name.is_empty() {
-                        metadata.set_field("Title", name)?;
+                        metadata.set_field("TAG_Title", name)?;
                     }
                 }
                 b"AUTH" => {
@@ -412,7 +418,7 @@ impl Codec for AifCodec {
                     let author_str = String::from_utf8_lossy(chunk_data);
                     let author = author_str.trim_end_matches('\0').trim();
                     if !author.is_empty() {
-                        metadata.set_field("Artist", author)?;
+                        metadata.set_field("TAG_Artist", author)?;
                     }
                 }
                 b"(c) " => {
@@ -420,7 +426,7 @@ impl Codec for AifCodec {
                     let copyright_str = String::from_utf8_lossy(chunk_data);
                     let copyright = copyright_str.trim_end_matches('\0').trim();
                     if !copyright.is_empty() {
-                        metadata.set_field("Copyright", copyright)?;
+                        metadata.set_field("TAG_Copyright", copyright)?;
                     }
                 }
                 b"ANNO" => {
@@ -428,7 +434,7 @@ impl Codec for AifCodec {
                     let annotation_str = String::from_utf8_lossy(chunk_data);
                     let annotation = annotation_str.trim_end_matches('\0').trim();
                     if !annotation.is_empty() {
-                        metadata.set_field("Comment", annotation)?;
+                        metadata.set_field("TAG_Comment", annotation)?;
                     }
                 }
                 b"iXML" => {
@@ -441,18 +447,31 @@ impl Codec for AifCodec {
                     metadata.parse_id3(chunk_data)?;
                 }
                 _ => {
-                    // Check if it's a text chunk (4 printable ASCII characters)
+                    // Skip audio and binary chunks - only process known text chunks
                     let chunk_id_bytes = chunk_id.to_be_bytes();
-                    let chunk_id_str_val = String::from_utf8_lossy(&chunk_id_bytes);
-                    let chunk_id_str = chunk_id_str_val.trim();
-                    if chunk_id_str
-                        .chars()
-                        .all(|c| c.is_ascii_graphic() || c == ' ')
-                    {
-                        let text_value_str = String::from_utf8_lossy(chunk_data);
-                        let text_value = text_value_str.trim_end_matches('\0').trim();
-                        if !text_value.is_empty() {
-                            metadata.set_field(chunk_id_str, text_value)?;
+                    
+                    // Skip audio data chunks and other binary chunks
+                    match &chunk_id_bytes {
+                        b"COMM" | b"SSND" | b"FVER" | b"PEAK" | b"INST" | b"MARK" | b"MIDI" => {
+                            // Skip audio format and binary chunks
+                        }
+                        _ => {
+                            // Only process chunks with text-like IDs and content
+                            let chunk_id_str_val = String::from_utf8_lossy(&chunk_id_bytes);
+                            let chunk_id_str = chunk_id_str_val.trim();
+                            
+                            // Ensure chunk ID is printable ASCII and content looks like text
+                            if chunk_id_str.chars().all(|c| c.is_ascii_graphic() || c == ' ') && 
+                               chunk_data.len() < 1024 && // Reasonable size limit for text
+                               chunk_data.iter().all(|&b| b.is_ascii() && (b.is_ascii_graphic() || b.is_ascii_whitespace() || b == 0))
+                            {
+                                let text_value_str = String::from_utf8_lossy(chunk_data);
+                                let text_value = text_value_str.trim_end_matches('\0').trim();
+                                if !text_value.is_empty() && text_value.len() < 256 {
+                                    let prefixed_key = format!("TAG_{}", chunk_id_str);
+                                    metadata.set_field(&prefixed_key, text_value)?;
+                                }
+                            }
                         }
                     }
                 }
@@ -567,22 +586,21 @@ impl AifCodec {
             return Err(anyhow!("Invalid AIFF file: missing COMM or SSND chunk"));
         }
 
-        // Write basic AIFF metadata chunks for common fields
-        if let Some(title) = metadata.get_field("Title") {
-            self.write_aif_chunk(&mut output, NAME_CHUNK_ID, title.as_bytes())?;
-        }
-        if let Some(artist) = metadata.get_field("Artist") {
-            self.write_aif_chunk(&mut output, AUTH_CHUNK_ID, artist.as_bytes())?;
-        }
-        if let Some(copyright) = metadata.get_field("Copyright") {
-            self.write_aif_chunk(&mut output, COPYRIGHT_CHUNK_ID, copyright.as_bytes())?;
-        }
-        if let Some(comment) = metadata.get_field("Comment") {
-            self.write_aif_chunk(&mut output, ANNO_CHUNK_ID, comment.as_bytes())?;
+        // Remove standard AIFF text chunks - rely only on iXML for metadata storage
+        // No longer writing NAME, AUTH, COPYRIGHT, or ANNO chunks
+        
+        // Convert ALL TAG_ fields to USER_ fields for iXML preservation since we're no longer using standard AIFF chunks
+        let mut ixml_metadata = metadata.clone();
+        for (key, value) in metadata.get_all_fields().iter() {
+            if key.starts_with("TAG_") {
+                // Convert TAG_ field to USER_ field for iXML storage
+                let user_key = format!("USER_{}", &key[4..]); // Replace TAG_ with USER_
+                ixml_metadata.set_field(&user_key, value)?;
+            }
         }
 
         // Write comprehensive metadata as iXML chunk (similar to WAV)
-        let ixml_content = self.create_ixml(metadata)?;
+        let ixml_content = self.create_ixml(&ixml_metadata)?;
         self.write_aif_chunk(&mut output, IXML_CHUNK_ID, ixml_content.as_bytes())?;
 
         // Write image chunks

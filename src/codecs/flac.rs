@@ -402,7 +402,8 @@ impl Codec for FlacCodec {
                 for (key, values) in &comments.comments {
                     if !values.is_empty() {
                         let standard_key = self.normalize_vorbis_key(key);
-                        metadata.set_field(&standard_key, &values[0])?;
+                        let prefixed_key = format!("TAG_{}", standard_key);
+                        metadata.set_field(&prefixed_key, &values[0])?;
                     }
                 }
             }
@@ -502,8 +503,16 @@ impl Codec for FlacCodec {
 
         // Add all fields from the hashmap to VorbisComment
         for (key, value) in metadata.get_all_fields().iter() {
-            // Convert to standard Vorbis comment field names
-            let vorbis_key = self.map_to_vorbis_key(key);
+            // Check if this is a TAG_ prefixed key (from Vorbis comments)
+            let vorbis_key = if key.starts_with("TAG_") {
+                // Remove TAG_ prefix and map the remaining key to Vorbis format
+                let unprefixed_key = &key[4..]; // Remove "TAG_" prefix
+                self.map_to_vorbis_key(unprefixed_key)
+            } else {
+                // This is likely an iXML field, skip it here as it will be handled in iXML creation
+                continue;
+            };
+            
             vorbis_comment
                 .comments
                 .entry(vorbis_key)

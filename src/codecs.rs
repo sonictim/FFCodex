@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, soundminer::get_metadata_keys};
 mod aif;
 mod flac;
 // mod mp3;
@@ -145,12 +145,27 @@ impl Metadata {
     }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
-        dprintln!("Set field: {} = {}", key, value);
-        self.map.insert(key.to_string(), value.to_string());
+        let trimmed_value = value.trim();
+        let keys = get_metadata_keys(key);
+        if keys.is_empty() {
+            dprintln!("Set field: {} = {}", key, trimmed_value);
+            self.map.insert(key.to_string(), trimmed_value.to_string());
+        } else {
+            for key in keys {
+                dprintln!("Set field: {} = {}", key, trimmed_value);
+                self.map.insert(key.to_string(), trimmed_value.to_string());
+            }
+        }
         Ok(())
     }
 
     pub fn get_field(&self, key: &str) -> Option<String> {
+        let keys = get_metadata_keys(key);
+        for k in keys {
+            if let Some(v) = self.map.get(*k) {
+                return Some(v.clone());
+            }
+        }
         self.map.get(key).cloned()
     }
 
@@ -330,7 +345,8 @@ impl Metadata {
             // Parse common text frames
             if let Some(key) = get_id3_frame_name(&frame_id) {
                 if let Some(text) = parse_id3_text_frame(frame_data) {
-                    self.set_field(&key, &text)?;
+                    let prefixed_key = format!("TAG_{}", key);
+                    self.set_field(&prefixed_key, &text)?;
                 }
             }
 
