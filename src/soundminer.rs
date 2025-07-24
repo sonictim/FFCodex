@@ -10,6 +10,7 @@ pub fn get_metadata_keys(key: &str) -> &'static [&'static str] {
         .or_else(|| key.strip_prefix("VORBIS_"))
         .or_else(|| key.strip_prefix("WV_"))
         .or_else(|| key.strip_prefix("TAG_"))
+        .or_else(|| key.strip_prefix("UCS_"))
         .unwrap_or(key)
         .to_lowercase()
         .replace([' ', '_', '-', '.'], "");
