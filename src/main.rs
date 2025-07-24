@@ -9,8 +9,8 @@ fn main() -> R<()> {
     // strip_soundminer_metadata(file_path)
 
     // Get input file from command line arguments
-    let input_file = "/Users/tfarrell/Desktop/FOODEat_TempVeggieFlac_TF_TJFR.wv";
-    let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wv";
+    let input_file = "/Users/tfarrell/Desktop/RAW RECORDING TEST/250721_001.WAV";
+    let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wav";
 
     // Test the strip_soundminer_metadata function
     // println!("Testing SMED stripping on reference file...");
@@ -18,9 +18,9 @@ fn main() -> R<()> {
 
     // clean_multi_mono(input_file)?;
 
-    println!("Input file: {}", input_file);
-    let data = get_basic_metadata(input_file)?;
-    println!("Basic metadata: {:?}", data);
+    // println!("Input file: {}", input_file);
+    // let data = get_basic_metadata(input_file)?;
+    // println!("Basic metadata: {:?}", data);
 
     // let fp = get_fingerprint(input_file)?;
     // println!("Fingerprint: {}", fp);
@@ -55,58 +55,58 @@ fn main() -> R<()> {
     c.set_metadata_field("USER_KEYWORDS", "metal friction squeaks")?;
     c.set_metadata_field("USER_FXNAME", "Metal Friction FX Name")?;
 
-    println!(
-        "AFTER SET: USER_DESIGNER = {:?}",
-        c.get_metadata_field("USER_DESIGNER")
-    );
-    println!(
-        "AFTER SET: ASWG_originator = {:?}",
-        c.get_metadata_field("ASWG_originator")
-    );
-    println!(
-        "AFTER SET: USER_CATEGORYFULL = {:?}",
-        c.get_metadata_field("USER_CATEGORYFULL")
-    );
+    // println!(
+    //     "AFTER SET: USER_DESIGNER = {:?}",
+    //     c.get_metadata_field("USER_DESIGNER")
+    // );
+    // println!(
+    //     "AFTER SET: ASWG_originator = {:?}",
+    //     c.get_metadata_field("ASWG_originator")
+    // );
+    // println!(
+    //     "AFTER SET: USER_CATEGORYFULL = {:?}",
+    //     c.get_metadata_field("USER_CATEGORYFULL")
+    // );
 
     // c.convert_dual_mono()?;
     println!("Embedding metadata to output file...");
     c.embed_metadata(output_file)?;
-    println!("First embedding complete!");
-    // clean_multi_mono(input_file)?;
+    // println!("First embedding complete!");
+    // // clean_multi_mono(input_file)?;
 
-    println!("Reading output file back...");
-    let c2 = Codex::new(output_file)?.extract_metadata()?;
-    println!("Successfully read output file back!");
+    // println!("Reading output file back...");
+    // let c2 = Codex::new(output_file)?.extract_metadata()?;
+    // println!("Successfully read output file back!");
 
-    // Debug: Print all metadata fields found
-    println!("All metadata fields in output file:");
-    if let Some(metadata) = &c2.metadata {
-        for (key, value) in metadata.get_all_fields() {
-            println!("  {} = {}", key, value);
-        }
-    } else {
-        println!("  No metadata found!");
-    }
+    // // Debug: Print all metadata fields found
+    // println!("All metadata fields in output file:");
+    // if let Some(metadata) = &c2.metadata {
+    //     for (key, value) in metadata.get_all_fields() {
+    //         println!("  {} = {}", key, value);
+    //     }
+    // } else {
+    //     println!("  No metadata found!");
+    // }
 
-    println!(
-        "AFTER EMBED: USER_DESIGNER = {:?}",
-        c2.get_metadata_field("USER_DESIGNER")
-    );
-    println!(
-        "AFTER EMBED: USER_DESCRIPTION = {:?}",
-        c2.get_metadata_field("USER_DESCRIPTION")
-    );
-    println!(
-        "AFTER EMBED: ASWG_originator = {:?}",
-        c2.get_metadata_field("ASWG_originator")
-    );
-    println!(
-        "AFTER EMBED: USER_CATEGORYFULL = {:?}",
-        c2.get_metadata_field("USER_CATEGORYFULL")
-    );
-    println!("Re-embedding metadata to output file...");
-    c2.embed_metadata(output_file)?;
-    println!("Second embedding complete!");
+    // println!(
+    //     "AFTER EMBED: USER_DESIGNER = {:?}",
+    //     c2.get_metadata_field("USER_DESIGNER")
+    // );
+    // println!(
+    //     "AFTER EMBED: USER_DESCRIPTION = {:?}",
+    //     c2.get_metadata_field("USER_DESCRIPTION")
+    // );
+    // println!(
+    //     "AFTER EMBED: ASWG_originator = {:?}",
+    //     c2.get_metadata_field("ASWG_originator")
+    // );
+    // println!(
+    //     "AFTER EMBED: USER_CATEGORYFULL = {:?}",
+    //     c2.get_metadata_field("USER_CATEGORYFULL")
+    // );
+    // println!("Re-embedding metadata to output file...");
+    // c2.embed_metadata(output_file)?;
+    // println!("Second embedding complete!");
 
     let elapsed_time = start_time.elapsed();
     println!("Finished in {} seconds", elapsed_time.as_secs_f32());

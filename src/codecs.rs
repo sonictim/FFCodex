@@ -145,17 +145,22 @@ impl Metadata {
     }
 
     pub fn set_field(&mut self, key: &str, value: &str) -> R<()> {
-        let trimmed_value = value.trim();
+        let trimmed_value = value.trim().replace("\n", "").replace("\r", "");
+
         let keys = get_metadata_keys(key);
-        if keys.is_empty() {
-            dprintln!("Set field: {} = {}", key, trimmed_value);
-            self.map.insert(key.to_string(), trimmed_value.to_string());
-        } else {
-            for key in keys {
-                dprintln!("Set field: {} = {}", key, trimmed_value);
-                self.map.insert(key.to_string(), trimmed_value.to_string());
+        match keys.is_empty() {
+            true => {
+                dprintln!("Set field: {} = {}", key, &trimmed_value);
+                self.map.insert(key.to_string(), trimmed_value);
+            }
+            false => {
+                for key in keys {
+                    dprintln!("Set field: {} = {}", key, &trimmed_value);
+                    self.map.insert(key.to_string(), trimmed_value.clone());
+                }
             }
         }
+
         Ok(())
     }
 

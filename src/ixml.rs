@@ -126,8 +126,12 @@ pub fn create_ixml_from_metadata(metadata: &Metadata) -> R<String> {
 
 pub fn xml_escape(text: &str) -> String {
     // Check if the text is already XML-escaped to avoid double-encoding
-    if text.contains("&amp;") || text.contains("&lt;") || text.contains("&gt;") || 
-       text.contains("&quot;") || text.contains("&apos;") {
+    if text.contains("&amp;")
+        || text.contains("&lt;")
+        || text.contains("&gt;")
+        || text.contains("&quot;")
+        || text.contains("&apos;")
+    {
         // Text appears to already be XML-escaped, return as-is
         text.to_string()
     } else {
