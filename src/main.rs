@@ -35,7 +35,7 @@ fn main() -> R<()> {
 
     let start_time = std::time::Instant::now();
 
-    let mut c = Codex::new(input_file)?.decode()?.extract_metadata()?;
+    let mut c = Codex::new(input_file)?.extract_metadata()?;
 
     println!(
         "BEFORE: USER_DESIGNER = {:?}",
