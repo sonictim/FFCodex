@@ -14,8 +14,7 @@ pub fn get_metadata_keys(key: &str) -> &'static [&'static str] {
         .to_lowercase()
         .replace([' ', '_', '-', '.'], "");
 
-    match normalized_key.as_str()
-    {
+    match normalized_key.as_str() {
         "catid" => &["USER_CATID", "ASWG_catId", "TAG_CatID"],
         "category" => &[
             "USER_CATEGORY",
@@ -89,6 +88,8 @@ pub fn get_metadata_keys(key: &str) -> &'static [&'static str] {
             "TAG_Location",
             "STEINBERG_MediaRecordingLocation",
         ],
+
+        "usercomments" | "userdata" => &["USER_USERCOMMENTS", "TAG_UserComments"],
 
         "releasedate" => &["USER_RELEASEDATE", "ASWG_releaseDate", "TAG_RETAIL_DATE"],
 
