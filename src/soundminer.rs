@@ -90,7 +90,7 @@ pub fn get_metadata_keys(key: &str) -> &'static [&'static str] {
             "STEINBERG_MediaRecordingLocation",
         ],
 
-        "usercomments" | "userdata" => &["USER_USERCOMMENTS", "TAG_UserComments"],
+        "usercomments" | "userdata" | "data" | "note" => &["USER_USERCOMMENTS", "TAG_UserComments"],
 
         "releasedate" => &["USER_RELEASEDATE", "ASWG_releaseDate", "TAG_RETAIL_DATE"],
 

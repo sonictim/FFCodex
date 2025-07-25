@@ -9,7 +9,7 @@ fn main() -> R<()> {
     // strip_soundminer_metadata(file_path)
 
     // Get input file from command line arguments
-    let input_file = "/Users/tfarrell/Desktop/RAW RECORDING TEST/250721_001.WAV";
+    let input_file = "/Users/tfarrell/Desktop/RAW RECORDING TEST/250722_003 raw.WAV";
     let output_file = "/Users/tfarrell/Desktop/FFCODEX output test.wav";
 
     // Test the strip_soundminer_metadata function

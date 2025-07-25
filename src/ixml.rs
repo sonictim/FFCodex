@@ -78,6 +78,19 @@ impl Metadata {
                 val = None;
             }
         }
+
+        if let Some(description) = self.get_field("BEXT_BWF_DESCRIPTION") {
+            if description.starts_with("zTAKE") {
+                description.split("z").into_iter().for_each(|part| {
+                    if part.is_empty() {
+                        return;
+                    }
+                    let (key, val) = part.split_once('=').unwrap_or((part, ""));
+                    self.set_field(&format!("USER_{}", key.trim()), val.trim());
+                });
+            }
+        }
+
         self.set_field("USER_EMBEDDER", "FFCodex")?;
         self.set_field("BEXT_BWF_CODING_HISTORY", "FFCodex")?;
 
