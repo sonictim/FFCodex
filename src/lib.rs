@@ -89,9 +89,10 @@ pub fn strip_soundminer_metadata(file_path: &str) -> R<()> {
 
     // Read the original file
     let original_data = std::fs::read(file_path)?;
-    
+
     // Determine the file format and strip SMED chunks accordingly
-    let extension = path.extension()
+    let extension = path
+        .extension()
         .and_then(|ext| ext.to_str())
         .ok_or_else(|| anyhow::anyhow!("Invalid file extension"))?;
 
@@ -106,13 +107,13 @@ pub fn strip_soundminer_metadata(file_path: &str) -> R<()> {
     // Create backup
     let backup_path = format!("{}.backup", file_path);
     std::fs::copy(file_path, backup_path)?;
-    
+
     // Write cleaned data back to original file
     std::fs::write(file_path, cleaned_data)?;
-    
+
     println!("Soundminer metadata stripped from: {}", file_path);
     println!("Backup created at: {}.backup", file_path);
-    
+
     Ok(())
 }
 
@@ -187,7 +188,22 @@ impl Codex {
         Ok(self)
     }
 
-    pub fn embed_metadata(&self, file_path: &str) -> R<()> {
+    pub fn embed_metadata(&self) -> R<()> {
+        let metadata = match &self.metadata {
+            Some(metadata) => metadata,
+            None => return Err(anyhow::anyhow!("No metadata available to embed")),
+        };
+
+        let Some(codec) = &self.codec else {
+            return Err(anyhow::anyhow!(
+                "No codec available for embedding metadata in file: {}",
+                self.path.display()
+            ));
+        };
+
+        codec.embed_metadata_to_file(self.path.to_str().unwrap(), metadata)
+    }
+    pub fn embed_metadata_to_different_file(&self, file_path: &str) -> R<()> {
         let metadata = match &self.metadata {
             Some(metadata) => metadata,
             None => return Err(anyhow::anyhow!("No metadata available to embed")),
@@ -447,7 +463,7 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
 
     let mut output = Vec::new();
     let mut cursor = Cursor::new(data);
-    
+
     // Copy fLaC header
     output.extend_from_slice(b"fLaC");
     cursor.set_position(4);
@@ -462,10 +478,9 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
         let block_header = data[pos];
         let is_last = (block_header & 0x80) != 0;
         let block_type = block_header & 0x7F;
-        
-        let block_size = ((data[pos + 1] as u32) << 16) 
-                       | ((data[pos + 2] as u32) << 8) 
-                       | (data[pos + 3] as u32);
+
+        let block_size =
+            ((data[pos + 1] as u32) << 16) | ((data[pos + 2] as u32) << 8) | (data[pos + 3] as u32);
 
         if pos + 4 + block_size as usize > data.len() {
             break;
@@ -474,7 +489,8 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
         let block_data = &data[pos + 4..pos + 4 + block_size as usize];
 
         // Check if this is a Soundminer APPLICATION block
-        let is_smed_block = if block_type == 2 && block_size >= 4 { // APPLICATION block
+        let is_smed_block = if block_type == 2 && block_size >= 4 {
+            // APPLICATION block
             &block_data[0..4] == b"SMED"
         } else {
             false
@@ -482,10 +498,10 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
 
         if !is_smed_block {
             // Copy non-SMED blocks
-            output.push(if is_last && block_header != data[pos] { 
+            output.push(if is_last && block_header != data[pos] {
                 block_header | 0x80 // Ensure last block flag is set if this becomes the last block
-            } else { 
-                block_header 
+            } else {
+                block_header
             });
             output.extend_from_slice(&data[pos + 1..pos + 4 + block_size as usize]);
         } else {
@@ -493,7 +509,7 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
         }
 
         cursor.set_position(pos as u64 + 4 + block_size as u64);
-        
+
         if is_last {
             break;
         }
@@ -515,7 +531,7 @@ fn strip_smed_from_aiff(data: &[u8]) -> R<Vec<u8>> {
 
     let mut output = Vec::new();
     let mut cursor = Cursor::new(data);
-    
+
     // Copy FORM/AIFF header
     output.extend_from_slice(&data[0..12]);
     cursor.set_position(12);
@@ -527,9 +543,9 @@ fn strip_smed_from_aiff(data: &[u8]) -> R<Vec<u8>> {
         let pos = cursor.position() as usize;
         let chunk_id = &data[pos..pos + 4];
         let chunk_size = ((data[pos + 4] as u32) << 24)
-                       | ((data[pos + 5] as u32) << 16)
-                       | ((data[pos + 6] as u32) << 8)
-                       | (data[pos + 7] as u32);
+            | ((data[pos + 5] as u32) << 16)
+            | ((data[pos + 6] as u32) << 8)
+            | (data[pos + 7] as u32);
 
         let total_chunk_size = 8 + chunk_size as usize + (chunk_size as usize % 2); // Include padding
 
@@ -538,8 +554,8 @@ fn strip_smed_from_aiff(data: &[u8]) -> R<Vec<u8>> {
         }
 
         // Check if this is a Soundminer chunk
-        let is_smed_chunk = chunk_id == b"SMED" || 
-                           (chunk_id == b"APPL" && chunk_size >= 4 && &data[pos + 8..pos + 12] == b"SMED");
+        let is_smed_chunk = chunk_id == b"SMED"
+            || (chunk_id == b"APPL" && chunk_size >= 4 && &data[pos + 8..pos + 12] == b"SMED");
 
         if !is_smed_chunk {
             // Copy non-SMED chunks
@@ -568,7 +584,7 @@ fn strip_smed_from_wav(data: &[u8]) -> R<Vec<u8>> {
 
     let mut output = Vec::new();
     let mut cursor = Cursor::new(data);
-    
+
     // Copy RIFF/WAVE header
     output.extend_from_slice(&data[0..12]);
     cursor.set_position(12);
@@ -579,7 +595,8 @@ fn strip_smed_from_wav(data: &[u8]) -> R<Vec<u8>> {
     while cursor.position() + 8 <= data.len() as u64 {
         let pos = cursor.position() as usize;
         let chunk_id = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
 
         let total_chunk_size = 8 + chunk_size as usize + (chunk_size as usize % 2); // Include padding
 
@@ -588,8 +605,8 @@ fn strip_smed_from_wav(data: &[u8]) -> R<Vec<u8>> {
         }
 
         // Check if this is a Soundminer chunk (typically in LIST INFO or custom chunks)
-        let is_smed_chunk = chunk_id == b"SMED" || 
-                           (chunk_id == b"LIST" && chunk_size >= 8 && &data[pos + 8..pos + 12] == b"SMED");
+        let is_smed_chunk = chunk_id == b"SMED"
+            || (chunk_id == b"LIST" && chunk_size >= 8 && &data[pos + 8..pos + 12] == b"SMED");
 
         if !is_smed_chunk {
             // Copy non-SMED chunks
@@ -620,7 +637,7 @@ fn strip_smed_from_wavpack(data: &[u8]) -> R<Vec<u8>> {
     // We'll use a simpler approach - copy the file and remove SMED tags via WavPack API
     // This is more complex to implement directly, so for now return the original data
     // and suggest using WavPack's tag removal functionality
-    
+
     println!("WavPack SMED removal not yet implemented - use WavPack tools to remove SMED tags");
     Ok(data.to_vec())
 }

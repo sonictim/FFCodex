@@ -70,7 +70,7 @@ fn main() -> R<()> {
 
     // c.convert_dual_mono()?;
     println!("Embedding metadata to output file...");
-    c.embed_metadata(output_file)?;
+    c.embed_metadata_to_different_file(output_file)?;
     // println!("First embedding complete!");
     // // clean_multi_mono(input_file)?;
 
