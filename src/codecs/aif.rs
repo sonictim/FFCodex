@@ -30,27 +30,29 @@ pub struct AifCodec;
 
 impl Codec for AifCodec {
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        // Optimized metadata extraction that only reads header and metadata chunks
+        // Optimized two-phase metadata extraction for AIF files
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
         
         let mut file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
         
-        // Read initial header to validate and get started
+        // Validate FORM/AIFF header first
         let mut header = [0u8; 12];
         file.read_exact(&mut header)?;
-        
-        // Validate FORM/AIFF header
         if &header[0..4] != b"FORM" || &header[8..12] != b"AIFF" {
             return Err(anyhow!("Not a valid AIFF file"));
         }
         
         let mut metadata = Metadata::new();
-        let mut pos = 12u64;
         
-        // Read chunks until we hit the SSND chunk or reach a reasonable limit
-        while pos < file_size && pos < 1024 * 1024 { // Stop after 1MB of metadata chunks
+        // PHASE 1: Read first 1MB (or until SSND chunk) for standard metadata
+        let mut pos = 12u64;
+        let first_phase_limit = std::cmp::min(file_size, 1024 * 1024); // 1MB limit
+        let mut found_ssnd_chunk = false;
+        let mut ssnd_chunk_start = 0u64;
+        
+        while pos < first_phase_limit {
             file.seek(SeekFrom::Start(pos))?;
             
             let mut chunk_header = [0u8; 8];
@@ -61,44 +63,56 @@ impl Codec for AifCodec {
             let chunk_id = &chunk_header[0..4];
             let chunk_size = u32::from_be_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
             
-            // If we hit the sound data chunk, we can stop - all metadata comes before it
+            // Track SSND chunk location
             if chunk_id == b"SSND" {
-                break;
+                found_ssnd_chunk = true;
+                ssnd_chunk_start = pos;
+                break; // Stop at SSND chunk for phase 1
             }
             
-            // Read metadata chunk data
-            let mut chunk_data = vec![0u8; chunk_size as usize];
-            if file.read_exact(&mut chunk_data).is_err() {
-                break;
-            }
-            
-            // Parse metadata chunks
-            match chunk_id {
-                b"COMM" => {
-                    if chunk_data.len() >= 18 {
-                        let mut cursor = Cursor::new(&chunk_data[..]);
-                        metadata.channels = cursor.read_u16::<BigEndian>()?;
-                        cursor.read_u32::<BigEndian>()?; // num_sample_frames - skip
-                        metadata.bit_depth = cursor.read_u16::<BigEndian>()?;
-                        // Sample rate is stored as IEEE 754 80-bit extended precision
-                        let sample_rate_f64 = read_ieee_extended(&mut cursor)?;
-                        metadata.sample_rate = sample_rate_f64 as u32;
-                    }
-                }
-                b"iXML" => {
-                    let xml_str = String::from_utf8_lossy(&chunk_data);
-                    metadata.parse_ixml(&xml_str)?;
-                }
-                b"ID3 " => {
-                    metadata.parse_id3(&chunk_data)?;
-                }
-                _ => {
-                    // Skip unknown chunks
+            // Parse metadata chunks in phase 1
+            if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 { // Reasonable size limit
+                let mut chunk_data = vec![0u8; chunk_size as usize];
+                if file.read_exact(&mut chunk_data).is_ok() {
+                    self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
                 }
             }
             
             // Move to next chunk (with padding)
             pos += 8 + chunk_size + (chunk_size % 2);
+        }
+        
+        // PHASE 2: Read last 1MB if file is large enough and we found SSND chunk
+        if found_ssnd_chunk && file_size > 2 * 1024 * 1024 { // Only for files > 2MB
+            let last_mb_start = std::cmp::max(ssnd_chunk_start + 1024 * 1024, file_size - 1024 * 1024);
+            
+            if last_mb_start < file_size {
+                pos = last_mb_start;
+                
+                // Align to potential chunk boundary
+                file.seek(SeekFrom::Start(pos))?;
+                
+                while pos < file_size {
+                    let mut chunk_header = [0u8; 8];
+                    if file.read_exact(&mut chunk_header).is_err() {
+                        break;
+                    }
+                    
+                    let chunk_id = &chunk_header[0..4];
+                    let chunk_size = u32::from_be_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
+                    
+                    // Parse any metadata chunks found at the end
+                    if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 && pos + 8 + chunk_size <= file_size {
+                        let mut chunk_data = vec![0u8; chunk_size as usize];
+                        if file.read_exact(&mut chunk_data).is_ok() {
+                            self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
+                        }
+                    }
+                    
+                    pos += 8 + chunk_size + (chunk_size % 2);
+                    if pos + 8 > file_size { break; } // Not enough space for another chunk header
+                }
+            }
         }
         
         Ok(metadata)
@@ -621,6 +635,57 @@ struct AifChunk {
 }
 
 impl AifCodec {
+    fn is_valid_chunk_id(&self, chunk_id: &[u8]) -> bool {
+        // Check if this is a known metadata chunk type for AIF
+        matches!(chunk_id, 
+            b"COMM" | b"NAME" | b"AUTH" | b"(c) " | b"ANNO" | b"COMT" |
+            b"iXML" | b"ID3 " | b"APPL" | b"MARK" | b"INST" | b"MIDI"
+        )
+    }
+    
+    fn parse_metadata_chunk(&self, chunk_id: &[u8], chunk_data: &[u8], metadata: &mut Metadata) -> R<()> {
+        match chunk_id {
+            b"COMM" => {
+                if chunk_data.len() >= 18 {
+                    let mut cursor = Cursor::new(&chunk_data[..]);
+                    metadata.channels = cursor.read_u16::<BigEndian>()?;
+                    cursor.read_u32::<BigEndian>()?; // num_sample_frames - skip
+                    metadata.bit_depth = cursor.read_u16::<BigEndian>()?;
+                    // Sample rate is stored as IEEE 754 80-bit extended precision
+                    let sample_rate_f64 = read_ieee_extended(&mut cursor)?;
+                    metadata.sample_rate = sample_rate_f64 as u32;
+                }
+            }
+            b"NAME" => {
+                let name_str = String::from_utf8_lossy(&chunk_data);
+                metadata.set_field("NAME", name_str.trim_end_matches('\0'))?;
+            }
+            b"AUTH" => {
+                let auth_str = String::from_utf8_lossy(&chunk_data);
+                metadata.set_field("AUTH", auth_str.trim_end_matches('\0'))?;
+            }
+            b"(c) " => {
+                let copyright_str = String::from_utf8_lossy(&chunk_data);
+                metadata.set_field("COPYRIGHT", copyright_str.trim_end_matches('\0'))?;
+            }
+            b"ANNO" => {
+                let annotation_str = String::from_utf8_lossy(&chunk_data);
+                metadata.set_field("ANNO", annotation_str.trim_end_matches('\0'))?;
+            }
+            b"iXML" => {
+                let xml_str = String::from_utf8_lossy(&chunk_data);
+                metadata.parse_ixml(&xml_str)?;
+            }
+            b"ID3 " => {
+                metadata.parse_id3(&chunk_data)?;
+            }
+            _ => {
+                // Skip unknown chunks
+            }
+        }
+        Ok(())
+    }
+
     fn parse_aif_structure(&self, file: &mut std::fs::File) -> R<Vec<AifChunk>> {
         use std::io::{Read, Seek, SeekFrom};
 

@@ -51,27 +51,29 @@ struct AudioInfo {
 
 impl Codec for WavCodec {
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        // Optimized metadata extraction that only reads header and metadata chunks
+        // Optimized two-phase metadata extraction for WAV files
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
         
         let mut file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
         
-        // Read initial header to validate and get started
+        // Validate RIFF/WAVE header first
         let mut header = [0u8; 12];
         file.read_exact(&mut header)?;
-        
-        // Validate RIFF/WAVE header
         if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
             return Err(anyhow!("Not a valid WAV file"));
         }
         
         let mut metadata = Metadata::new();
-        let mut pos = 12u64;
         
-        // Read chunks until we hit the data chunk or reach a reasonable limit
-        while pos < file_size && pos < 1024 * 1024 { // Stop after 1MB of metadata chunks
+        // PHASE 1: Read first 1MB (or until data chunk) for standard metadata
+        let mut pos = 12u64;
+        let first_phase_limit = std::cmp::min(file_size, 1024 * 1024); // 1MB limit
+        let mut found_data_chunk = false;
+        let mut data_chunk_start = 0u64;
+        
+        while pos < first_phase_limit {
             file.seek(SeekFrom::Start(pos))?;
             
             let mut chunk_header = [0u8; 8];
@@ -82,50 +84,56 @@ impl Codec for WavCodec {
             let chunk_id = &chunk_header[0..4];
             let chunk_size = u32::from_le_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
             
-            // If we hit the data chunk, we can stop - all metadata comes before it
+            // Track data chunk location
             if chunk_id == b"data" {
-                break;
+                found_data_chunk = true;
+                data_chunk_start = pos;
+                break; // Stop at data chunk for phase 1
             }
             
-            // Read metadata chunk data
-            let mut chunk_data = vec![0u8; chunk_size as usize];
-            if file.read_exact(&mut chunk_data).is_err() {
-                break;
-            }
-            
-            // Parse metadata chunks
-            match chunk_id {
-                b"fmt " => {
-                    if chunk_data.len() >= 16 {
-                        let mut cursor = Cursor::new(&chunk_data);
-                        metadata.format_tag = cursor.read_u16::<LittleEndian>()?;
-                        metadata.channels = cursor.read_u16::<LittleEndian>()?;
-                        metadata.sample_rate = cursor.read_u32::<LittleEndian>()?;
-                        cursor.read_u32::<LittleEndian>()?; // byte_rate - skip
-                        cursor.read_u16::<LittleEndian>()?; // block_align - skip
-                        metadata.bit_depth = cursor.read_u16::<LittleEndian>()?;
-                    }
-                }
-                b"bext" => {
-                    metadata.parse_bext(&chunk_data)?;
-                }
-                b"iXML" => {
-                    let xml_str = String::from_utf8_lossy(&chunk_data);
-                    metadata.parse_ixml(&xml_str)?;
-                }
-                b"LIST" => {
-                    // Skip LIST chunk parsing for now - would need to implement parse_list_chunk
-                }
-                b"id3 " | b"ID3 " => {
-                    metadata.parse_id3(&chunk_data)?;
-                }
-                _ => {
-                    // Skip unknown chunks
+            // Parse metadata chunks in phase 1
+            if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 { // Reasonable size limit
+                let mut chunk_data = vec![0u8; chunk_size as usize];
+                if file.read_exact(&mut chunk_data).is_ok() {
+                    self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
                 }
             }
             
             // Move to next chunk (with padding)
             pos += 8 + chunk_size + (chunk_size % 2);
+        }
+        
+        // PHASE 2: Read last 1MB if file is large enough and we found a data chunk
+        if found_data_chunk && file_size > 2 * 1024 * 1024 { // Only for files > 2MB
+            let last_mb_start = std::cmp::max(data_chunk_start + 1024 * 1024, file_size - 1024 * 1024);
+            
+            if last_mb_start < file_size {
+                pos = last_mb_start;
+                
+                // Align to potential chunk boundary
+                file.seek(SeekFrom::Start(pos))?;
+                
+                while pos < file_size {
+                    let mut chunk_header = [0u8; 8];
+                    if file.read_exact(&mut chunk_header).is_err() {
+                        break;
+                    }
+                    
+                    let chunk_id = &chunk_header[0..4];
+                    let chunk_size = u32::from_le_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
+                    
+                    // Parse any metadata chunks found at the end
+                    if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 && pos + 8 + chunk_size <= file_size {
+                        let mut chunk_data = vec![0u8; chunk_size as usize];
+                        if file.read_exact(&mut chunk_data).is_ok() {
+                            self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
+                        }
+                    }
+                    
+                    pos += 8 + chunk_size + (chunk_size % 2);
+                    if pos + 8 > file_size { break; } // Not enough space for another chunk header
+                }
+            }
         }
         
         Ok(metadata)
@@ -688,6 +696,48 @@ struct WavChunk {
 }
 
 impl WavCodec {
+    fn is_valid_chunk_id(&self, chunk_id: &[u8]) -> bool {
+        // Check if this is a known metadata chunk type
+        matches!(chunk_id, 
+            b"fmt " | b"bext" | b"iXML" | b"LIST" | b"id3 " | b"ID3 " |
+            b"JUNK" | b"PAD " | b"fact" | b"cue " | b"plst" | b"labl" |
+            b"note" | b"ltxt" | b"smpl" | b"inst"
+        )
+    }
+    
+    fn parse_metadata_chunk(&self, chunk_id: &[u8], chunk_data: &[u8], metadata: &mut Metadata) -> R<()> {
+        match chunk_id {
+            b"fmt " => {
+                if chunk_data.len() >= 16 {
+                    let mut cursor = Cursor::new(&chunk_data);
+                    metadata.format_tag = cursor.read_u16::<LittleEndian>()?;
+                    metadata.channels = cursor.read_u16::<LittleEndian>()?;
+                    metadata.sample_rate = cursor.read_u32::<LittleEndian>()?;
+                    cursor.read_u32::<LittleEndian>()?; // byte_rate - skip
+                    cursor.read_u16::<LittleEndian>()?; // block_align - skip
+                    metadata.bit_depth = cursor.read_u16::<LittleEndian>()?;
+                }
+            }
+            b"bext" => {
+                metadata.parse_bext(&chunk_data)?;
+            }
+            b"iXML" => {
+                let xml_str = String::from_utf8_lossy(&chunk_data);
+                metadata.parse_ixml(&xml_str)?;
+            }
+            b"LIST" => {
+                // Skip LIST chunk parsing for now - would need more complex implementation
+            }
+            b"id3 " | b"ID3 " => {
+                metadata.parse_id3(&chunk_data)?;
+            }
+            _ => {
+                // Skip unknown chunks
+            }
+        }
+        Ok(())
+    }
+
     fn parse_wav_structure(&self, file: &mut std::fs::File) -> R<Vec<WavChunk>> {
         use std::io::{Read, Seek, SeekFrom};
 
@@ -703,6 +753,10 @@ impl WavCodec {
 
         let mut chunks = Vec::new();
         let mut pos = 12u64;
+
+        // Only parse chunks until we find the data chunk
+        // This prevents scanning the entire file for large audio files
+        let mut found_data_chunk = false;
 
         loop {
             file.seek(SeekFrom::Start(pos))?;
@@ -730,7 +784,17 @@ impl WavCodec {
                 end_position: padded_end,
             });
 
+            // Stop after finding data chunk - no need to parse beyond it for metadata operations
+            if &chunk_id == b"data" {
+                found_data_chunk = true;
+                break;
+            }
+
             pos = padded_end;
+        }
+
+        if !found_data_chunk {
+            return Err(anyhow!("No data chunk found in WAV file"));
         }
 
         Ok(chunks)

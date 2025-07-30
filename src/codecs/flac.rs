@@ -23,27 +23,27 @@ pub struct FlacCodec;
 
 impl Codec for FlacCodec {
     fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
-        // Optimized metadata extraction that only reads metadata blocks
+        // Optimized two-phase metadata extraction for FLAC files
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
         
         let mut file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
         
-        // Read initial header to validate
+        // Validate FLAC header first
         let mut header = [0u8; 4];
         file.read_exact(&mut header)?;
-        
-        // Validate FLAC header
         if &header != b"fLaC" {
             return Err(anyhow!("Not a valid FLAC file"));
         }
         
-        let mut metadata = Metadata::new();
+        // PHASE 1: Read first 2MB (or until last metadata block) for standard metadata
         let mut pos = 4u64;
+        let first_phase_limit = std::cmp::min(file_size, 2 * 1024 * 1024); // 2MB limit for FLAC metadata
+        let mut found_audio_frames = false;
+        let mut audio_start = 0u64;
         
-        // Read metadata blocks until we hit the audio frames
-        while pos < file_size && pos < 1024 * 1024 { // Stop after 1MB of metadata
+        while pos < first_phase_limit {
             file.seek(SeekFrom::Start(pos))?;
             
             let mut block_header = [0u8; 4];
@@ -57,48 +57,45 @@ impl Codec for FlacCodec {
                            ((block_header[2] as u32) << 8) | 
                            (block_header[3] as u32);
             
-            // Read block data
-            let mut block_data = vec![0u8; block_size as usize];
-            if file.read_exact(&mut block_data).is_err() {
-                break;
-            }
-            
-            // Parse specific metadata blocks
-            match block_type {
-                4 => { // VORBIS_COMMENT
-                    // Let metaflac handle this more efficiently
-                    return self.parse_metadata(&std::fs::read(file_path)?);
-                }
-                2 => { // APPLICATION block
-                    if block_data.len() >= 4 {
-                        let app_id = &block_data[0..4];
-                        let app_data = &block_data[4..];
-                        
-                        if app_id == b"iXML" {
-                            if let Ok(xml_str) = std::str::from_utf8(app_data) {
-                                metadata.parse_ixml(xml_str)?;
-                            }
-                        }
-                    }
-                }
-                _ => {} // Skip other blocks for now
-            }
-            
             pos += 4 + block_size as u64;
             
             if is_last {
-                break;
+                found_audio_frames = true;
+                audio_start = pos;
+                break; // Stop at last metadata block for phase 1
             }
         }
         
-        // For FLAC, we actually need to use metaflac for complete parsing
-        // since it handles Vorbis comments properly. But we've optimized by 
-        // only reading if we found metadata blocks worth parsing.
-        if pos < 1024 * 1024 { // Only if we haven't read too much already
-            return self.parse_metadata(&std::fs::read(file_path)?);
-        }
+        // PHASE 2: Read last 1MB if file is large enough and we found audio frames
+        let metadata_end_pos = if found_audio_frames && file_size > 4 * 1024 * 1024 { // Only for files > 4MB
+            let last_mb_start = std::cmp::max(audio_start + 1024 * 1024, file_size - 1024 * 1024);
+            
+            if last_mb_start < file_size {
+                // Check if there are any Application blocks or other metadata at the end
+                pos = last_mb_start;
+                file.seek(SeekFrom::Start(pos))?;
+                
+                // For FLAC, metadata at the end would be in Application blocks
+                // but this is extremely rare, so we'll just note the position
+                file_size
+            } else {
+                audio_start
+            }
+        } else {
+            pos
+        };
         
-        Ok(metadata)
+        // Use truncated buffer approach - only read metadata portion
+        let metadata_limit = std::cmp::min(file_size, std::cmp::max(metadata_end_pos, 2 * 1024 * 1024));
+        let truncated_data = {
+            file.seek(SeekFrom::Start(0))?;
+            let mut buffer = vec![0u8; metadata_limit as usize];
+            file.read_exact(&mut buffer)?;
+            buffer
+        };
+        
+        // Parse metadata using metaflac with the truncated buffer
+        self.parse_metadata(&truncated_data)
     }
     fn as_str(&self) -> &'static str {
         "FLAC"
