@@ -50,6 +50,86 @@ struct AudioInfo {
 }
 
 impl Codec for WavCodec {
+    fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
+        // Optimized metadata extraction that only reads header and metadata chunks
+        use std::fs::File;
+        use std::io::{Read, Seek, SeekFrom};
+        
+        let mut file = File::open(file_path)?;
+        let file_size = file.metadata()?.len();
+        
+        // Read initial header to validate and get started
+        let mut header = [0u8; 12];
+        file.read_exact(&mut header)?;
+        
+        // Validate RIFF/WAVE header
+        if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+            return Err(anyhow!("Not a valid WAV file"));
+        }
+        
+        let mut metadata = Metadata::new();
+        let mut pos = 12u64;
+        
+        // Read chunks until we hit the data chunk or reach a reasonable limit
+        while pos < file_size && pos < 1024 * 1024 { // Stop after 1MB of metadata chunks
+            file.seek(SeekFrom::Start(pos))?;
+            
+            let mut chunk_header = [0u8; 8];
+            if file.read_exact(&mut chunk_header).is_err() {
+                break;
+            }
+            
+            let chunk_id = &chunk_header[0..4];
+            let chunk_size = u32::from_le_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
+            
+            // If we hit the data chunk, we can stop - all metadata comes before it
+            if chunk_id == b"data" {
+                break;
+            }
+            
+            // Read metadata chunk data
+            let mut chunk_data = vec![0u8; chunk_size as usize];
+            if file.read_exact(&mut chunk_data).is_err() {
+                break;
+            }
+            
+            // Parse metadata chunks
+            match chunk_id {
+                b"fmt " => {
+                    if chunk_data.len() >= 16 {
+                        let mut cursor = Cursor::new(&chunk_data);
+                        metadata.format_tag = cursor.read_u16::<LittleEndian>()?;
+                        metadata.channels = cursor.read_u16::<LittleEndian>()?;
+                        metadata.sample_rate = cursor.read_u32::<LittleEndian>()?;
+                        cursor.read_u32::<LittleEndian>()?; // byte_rate - skip
+                        cursor.read_u16::<LittleEndian>()?; // block_align - skip
+                        metadata.bit_depth = cursor.read_u16::<LittleEndian>()?;
+                    }
+                }
+                b"bext" => {
+                    metadata.parse_bext(&chunk_data)?;
+                }
+                b"iXML" => {
+                    let xml_str = String::from_utf8_lossy(&chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
+                }
+                b"LIST" => {
+                    // Skip LIST chunk parsing for now - would need to implement parse_list_chunk
+                }
+                b"id3 " | b"ID3 " => {
+                    metadata.parse_id3(&chunk_data)?;
+                }
+                _ => {
+                    // Skip unknown chunks
+                }
+            }
+            
+            // Move to next chunk (with padding)
+            pos += 8 + chunk_size + (chunk_size % 2);
+        }
+        
+        Ok(metadata)
+    }
     fn as_str(&self) -> &'static str {
         "WAV"
     }

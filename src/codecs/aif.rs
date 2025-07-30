@@ -29,6 +29,81 @@ const BYTE_MASK: i32 = 0xFF;
 pub struct AifCodec;
 
 impl Codec for AifCodec {
+    fn extract_metadata_from_file(&self, file_path: &str) -> R<Metadata> {
+        // Optimized metadata extraction that only reads header and metadata chunks
+        use std::fs::File;
+        use std::io::{Read, Seek, SeekFrom};
+        
+        let mut file = File::open(file_path)?;
+        let file_size = file.metadata()?.len();
+        
+        // Read initial header to validate and get started
+        let mut header = [0u8; 12];
+        file.read_exact(&mut header)?;
+        
+        // Validate FORM/AIFF header
+        if &header[0..4] != b"FORM" || &header[8..12] != b"AIFF" {
+            return Err(anyhow!("Not a valid AIFF file"));
+        }
+        
+        let mut metadata = Metadata::new();
+        let mut pos = 12u64;
+        
+        // Read chunks until we hit the SSND chunk or reach a reasonable limit
+        while pos < file_size && pos < 1024 * 1024 { // Stop after 1MB of metadata chunks
+            file.seek(SeekFrom::Start(pos))?;
+            
+            let mut chunk_header = [0u8; 8];
+            if file.read_exact(&mut chunk_header).is_err() {
+                break;
+            }
+            
+            let chunk_id = &chunk_header[0..4];
+            let chunk_size = u32::from_be_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
+            
+            // If we hit the sound data chunk, we can stop - all metadata comes before it
+            if chunk_id == b"SSND" {
+                break;
+            }
+            
+            // Read metadata chunk data
+            let mut chunk_data = vec![0u8; chunk_size as usize];
+            if file.read_exact(&mut chunk_data).is_err() {
+                break;
+            }
+            
+            // Parse metadata chunks
+            match chunk_id {
+                b"COMM" => {
+                    if chunk_data.len() >= 18 {
+                        let mut cursor = Cursor::new(&chunk_data[..]);
+                        metadata.channels = cursor.read_u16::<BigEndian>()?;
+                        cursor.read_u32::<BigEndian>()?; // num_sample_frames - skip
+                        metadata.bit_depth = cursor.read_u16::<BigEndian>()?;
+                        // Sample rate is stored as IEEE 754 80-bit extended precision
+                        let sample_rate_f64 = read_ieee_extended(&mut cursor)?;
+                        metadata.sample_rate = sample_rate_f64 as u32;
+                    }
+                }
+                b"iXML" => {
+                    let xml_str = String::from_utf8_lossy(&chunk_data);
+                    metadata.parse_ixml(&xml_str)?;
+                }
+                b"ID3 " => {
+                    metadata.parse_id3(&chunk_data)?;
+                }
+                _ => {
+                    // Skip unknown chunks
+                }
+            }
+            
+            // Move to next chunk (with padding)
+            pos += 8 + chunk_size + (chunk_size % 2);
+        }
+        
+        Ok(metadata)
+    }
+    
     fn as_str(&self) -> &'static str {
         "AIFF"
     }
