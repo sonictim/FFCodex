@@ -550,7 +550,7 @@ impl Codec for WavCodec {
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
         use std::fs::OpenOptions;
-        use std::io::{Read, Seek, SeekFrom, Write};
+        use std::io::Read;
 
         // Open file for read/write
         let mut file = OpenOptions::new()
@@ -558,54 +558,267 @@ impl Codec for WavCodec {
             .write(true)
             .open(file_path)?;
 
-        // Read entire file to analyze structure
-        let mut file_data = Vec::new();
-        file.read_to_end(&mut file_data)?;
+        // Read only the header to analyze file structure (not the entire file!)
+        let mut header_buffer = vec![0u8; 8192]; // Read first 8KB for header analysis
+        let header_bytes_read = file.read(&mut header_buffer)?;
+        header_buffer.truncate(header_bytes_read);
 
-        // Find data chunk position and size
-        let (data_start, data_size) = self.find_data_chunk_position(&file_data)?;
-        let data_end = data_start + data_size;
+        // Parse WAV structure from header
+        let chunks = self.parse_wav_structure(&mut file)?;
+        
+        // Find data chunk location
+        let data_chunk = chunks.iter()
+            .find(|chunk| &chunk.id == b"data")
+            .ok_or_else(|| anyhow!("No data chunk found"))?;
 
         // Create new metadata chunks
-        let metadata_chunks = self.create_metadata_chunks(metadata)?;
+        let new_metadata = self.create_metadata_chunks(metadata)?;
+        
+        // Calculate new file layout
+        let fmt_chunk = chunks.iter()
+            .find(|chunk| &chunk.id == b"fmt ")
+            .ok_or_else(|| anyhow!("No fmt chunk found"))?;
 
-        // Build new file structure: RIFF header + fmt + metadata chunks + data chunk
-        let mut new_file_data = Vec::new();
+        // New metadata insertion point (after fmt chunk)
+        let metadata_insert_pos = fmt_chunk.end_position;
         
-        // Copy RIFF header (12 bytes)
-        new_file_data.extend_from_slice(&file_data[0..12]);
-        
-        // Copy fmt chunk (find and copy it)
-        let fmt_chunk = self.extract_fmt_chunk(&file_data)?;
-        new_file_data.extend_from_slice(&fmt_chunk);
-        
-        // Add metadata chunks
-        new_file_data.extend_from_slice(&metadata_chunks);
-        
-        // Add data chunk header and data
-        new_file_data.extend_from_slice(b"data");
-        new_file_data.extend_from_slice(&(data_size as u32).to_le_bytes());
-        new_file_data.extend_from_slice(&file_data[data_start..data_end]);
-        
-        // Add padding if needed
-        if data_size % 2 == 1 {
-            new_file_data.push(0);
+        // Calculate size difference
+        let old_metadata_size = (data_chunk.start_position - metadata_insert_pos - 8) as usize; // -8 for data chunk header
+        let new_metadata_size = new_metadata.len();
+        let size_diff = new_metadata_size as i64 - old_metadata_size as i64;
+
+        if size_diff == 0 && new_metadata_size <= old_metadata_size {
+            // Perfect fit or smaller - can do true in-place update
+            self.update_metadata_in_place(&mut file, metadata_insert_pos, &new_metadata, data_chunk)?;
+        } else {
+            // Size changed - need to move data chunk
+            self.update_metadata_with_move(&mut file, &chunks, metadata_insert_pos, &new_metadata, size_diff)?;
         }
-
-        // Update RIFF size
-        let total_size = (new_file_data.len() - 8) as u32;
-        new_file_data[4..8].copy_from_slice(&total_size.to_le_bytes());
-
-        // Write the new data back to file
-        file.seek(SeekFrom::Start(0))?;
-        file.write_all(&new_file_data)?;
-        file.set_len(new_file_data.len() as u64)?;
         
         Ok(())
     }
 }
 
+#[derive(Debug, Clone)]
+struct WavChunk {
+    id: [u8; 4],
+    size: u32,
+    start_position: u64, // Position of chunk data (after header)
+    end_position: u64,   // Position after chunk data + padding
+}
+
 impl WavCodec {
+    fn parse_wav_structure(&self, file: &mut std::fs::File) -> R<Vec<WavChunk>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        file.seek(SeekFrom::Start(0))?;
+        
+        // Read and validate RIFF header
+        let mut header = [0u8; 12];
+        file.read_exact(&mut header)?;
+        
+        if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+            return Err(anyhow!("Invalid WAV file"));
+        }
+
+        let mut chunks = Vec::new();
+        let mut pos = 12u64;
+
+        loop {
+            file.seek(SeekFrom::Start(pos))?;
+            
+            let mut chunk_header = [0u8; 8];
+            match file.read_exact(&mut chunk_header) {
+                Ok(_) => {},
+                Err(_) => break, // End of file
+            }
+
+            let mut chunk_id = [0u8; 4];
+            chunk_id.copy_from_slice(&chunk_header[0..4]);
+            let chunk_size = u32::from_le_bytes([
+                chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]
+            ]);
+
+            let data_start = pos + 8;
+            let data_end = data_start + chunk_size as u64;
+            let padded_end = if chunk_size % 2 == 1 { data_end + 1 } else { data_end };
+
+            chunks.push(WavChunk {
+                id: chunk_id,
+                size: chunk_size,
+                start_position: data_start,
+                end_position: padded_end,
+            });
+
+            pos = padded_end;
+        }
+
+        Ok(chunks)
+    }
+
+    fn update_metadata_in_place(
+        &self, 
+        file: &mut std::fs::File, 
+        metadata_pos: u64, 
+        new_metadata: &[u8],
+        data_chunk: &WavChunk
+    ) -> R<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        // Seek to metadata position and overwrite
+        file.seek(SeekFrom::Start(metadata_pos))?;
+        file.write_all(new_metadata)?;
+
+        // Clear any remaining old metadata with zeros
+        let old_metadata_end = data_chunk.start_position - 8; // -8 for data chunk header
+        let new_metadata_end = metadata_pos + new_metadata.len() as u64;
+        
+        if old_metadata_end > new_metadata_end {
+            let clear_size = old_metadata_end - new_metadata_end;
+            let zeros = vec![0u8; clear_size as usize];
+            file.write_all(&zeros)?;
+        }
+
+        // Update RIFF size in header (no change needed if same size)
+        self.update_riff_size(file)?;
+
+        Ok(())
+    }
+
+    fn update_metadata_with_move(
+        &self,
+        file: &mut std::fs::File,
+        chunks: &[WavChunk],
+        metadata_pos: u64,
+        new_metadata: &[u8],
+        size_diff: i64,
+    ) -> R<()> {
+
+        let data_chunk = chunks.iter()
+            .find(|chunk| &chunk.id == b"data")
+            .ok_or_else(|| anyhow!("No data chunk found"))?;
+
+        if size_diff > 0 {
+            // File growing - need to make space by moving data chunk backward
+            self.move_data_chunk_for_growth(file, data_chunk, metadata_pos, new_metadata, size_diff as u64)?;
+        } else {
+            // File shrinking - write metadata first, then move data chunk forward
+            self.move_data_chunk_for_shrink(file, data_chunk, metadata_pos, new_metadata, (-size_diff) as u64)?;
+        }
+
+        self.update_riff_size(file)?;
+        Ok(())
+    }
+
+    fn move_data_chunk_for_growth(
+        &self,
+        file: &mut std::fs::File,
+        data_chunk: &WavChunk,
+        metadata_pos: u64,
+        new_metadata: &[u8],
+        growth: u64,
+    ) -> R<()> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        // Move data in chunks to avoid loading entire file into memory
+        const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
+        let data_size = data_chunk.size as u64;
+        let old_data_start = data_chunk.start_position;
+        let new_data_start = old_data_start + growth;
+
+        // Move data from end to beginning to avoid overwriting
+        let mut remaining = data_size;
+        while remaining > 0 {
+            let chunk_size = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
+            let offset = remaining - chunk_size as u64;
+            
+            // Read chunk from original position
+            file.seek(SeekFrom::Start(old_data_start + offset))?;
+            let mut buffer = vec![0u8; chunk_size];
+            file.read_exact(&mut buffer)?;
+            
+            // Write to new position
+            file.seek(SeekFrom::Start(new_data_start + offset))?;
+            file.write_all(&buffer)?;
+            
+            remaining -= chunk_size as u64;
+        }
+
+        // Now write metadata in the space we created
+        file.seek(SeekFrom::Start(metadata_pos))?;
+        file.write_all(new_metadata)?;
+
+        // Write new data chunk header
+        file.seek(SeekFrom::Start(new_data_start - 8))?;
+        file.write_all(b"data")?;
+        file.write_all(&(data_chunk.size).to_le_bytes())?;
+
+        // Update file length
+        file.set_len(new_data_start + data_size)?;
+
+        Ok(())
+    }
+
+    fn move_data_chunk_for_shrink(
+        &self,
+        file: &mut std::fs::File,
+        data_chunk: &WavChunk,
+        metadata_pos: u64,
+        new_metadata: &[u8],
+        shrink: u64,
+    ) -> R<()> {
+        use std::io::{Read, Seek, SeekFrom, Write};
+
+        // Write new metadata first
+        file.seek(SeekFrom::Start(metadata_pos))?;
+        file.write_all(new_metadata)?;
+
+        // Calculate new data position
+        let old_data_start = data_chunk.start_position;
+        let new_data_start = old_data_start - shrink;
+        let data_size = data_chunk.size as u64;
+
+        // Write new data chunk header
+        file.seek(SeekFrom::Start(new_data_start - 8))?;
+        file.write_all(b"data")?;
+        file.write_all(&(data_chunk.size).to_le_bytes())?;
+
+        // Move data forward in chunks
+        const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
+        let mut moved = 0u64;
+        while moved < data_size {
+            let chunk_size = std::cmp::min(data_size - moved, BUFFER_SIZE as u64) as usize;
+            
+            // Read from old position
+            file.seek(SeekFrom::Start(old_data_start + moved))?;
+            let mut buffer = vec![0u8; chunk_size];
+            file.read_exact(&mut buffer)?;
+            
+            // Write to new position
+            file.seek(SeekFrom::Start(new_data_start + moved))?;
+            file.write_all(&buffer)?;
+            
+            moved += chunk_size as u64;
+        }
+
+        // Truncate file to new size
+        file.set_len(new_data_start + data_size)?;
+
+        Ok(())
+    }
+
+    fn update_riff_size(&self, file: &mut std::fs::File) -> R<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let file_size = file.metadata()?.len();
+        let riff_size = (file_size - 8) as u32; // Exclude RIFF header itself
+
+        file.seek(SeekFrom::Start(4))?;
+        file.write_all(&riff_size.to_le_bytes())?;
+
+        Ok(())
+    }
+
     fn find_data_chunk_position(&self, input: &[u8]) -> R<(usize, usize)> {
         let mut cursor = Cursor::new(input);
         cursor.seek(SeekFrom::Start(12))?; // Skip RIFF header
