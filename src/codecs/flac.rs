@@ -29,6 +29,10 @@ impl Codec for FlacCodec {
         "flac"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn validate_file_format(&self, data: &[u8]) -> R<()> {
         // Check if the file is too small
         if data.len() < 4 {

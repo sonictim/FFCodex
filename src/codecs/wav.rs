@@ -57,6 +57,11 @@ impl Codec for WavCodec {
     fn file_extension(&self) -> &'static str {
         "wav"
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn validate_file_format(&self, data: &[u8]) -> R<()> {
         // Check file size
         if data.len() < HEADER_SIZE {
@@ -544,21 +549,219 @@ impl Codec for WavCodec {
     }
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
-        // Read the existing file
-        let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+        use std::fs::OpenOptions;
+        use std::io::{Read, Seek, SeekFrom, Write};
 
-        // Create new metadata from the hashmap
-        let new_data = self.embed_metadata_from_hashmap(&mapped_file, metadata)?;
+        // Open file for read/write
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_path)?;
 
-        // Write the data back to the file
-        let _data_len = new_data.len();
-        std::fs::write(file_path, new_data)?;
+        // Read entire file to analyze structure
+        let mut file_data = Vec::new();
+        file.read_to_end(&mut file_data)?;
+
+        // Find data chunk position and size
+        let (data_start, data_size) = self.find_data_chunk_position(&file_data)?;
+        let data_end = data_start + data_size;
+
+        // Create new metadata chunks
+        let metadata_chunks = self.create_metadata_chunks(metadata)?;
+
+        // Build new file structure: RIFF header + fmt + metadata chunks + data chunk
+        let mut new_file_data = Vec::new();
+        
+        // Copy RIFF header (12 bytes)
+        new_file_data.extend_from_slice(&file_data[0..12]);
+        
+        // Copy fmt chunk (find and copy it)
+        let fmt_chunk = self.extract_fmt_chunk(&file_data)?;
+        new_file_data.extend_from_slice(&fmt_chunk);
+        
+        // Add metadata chunks
+        new_file_data.extend_from_slice(&metadata_chunks);
+        
+        // Add data chunk header and data
+        new_file_data.extend_from_slice(b"data");
+        new_file_data.extend_from_slice(&(data_size as u32).to_le_bytes());
+        new_file_data.extend_from_slice(&file_data[data_start..data_end]);
+        
+        // Add padding if needed
+        if data_size % 2 == 1 {
+            new_file_data.push(0);
+        }
+
+        // Update RIFF size
+        let total_size = (new_file_data.len() - 8) as u32;
+        new_file_data[4..8].copy_from_slice(&total_size.to_le_bytes());
+
+        // Write the new data back to file
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&new_file_data)?;
+        file.set_len(new_file_data.len() as u64)?;
+        
         Ok(())
     }
 }
 
 impl WavCodec {
+    fn find_data_chunk_position(&self, input: &[u8]) -> R<(usize, usize)> {
+        let mut cursor = Cursor::new(input);
+        cursor.seek(SeekFrom::Start(12))?; // Skip RIFF header
+
+        while cursor.position() < input.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<LittleEndian>()? as usize;
+            
+            if &chunk_id == b"data" {
+                let data_start = cursor.position() as usize;
+                return Ok((data_start, chunk_size));
+            }
+
+            // Skip to next chunk
+            cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+            if chunk_size % 2 == 1 {
+                cursor.seek(SeekFrom::Current(1))?; // Padding
+            }
+        }
+
+        Err(anyhow!("No data chunk found"))
+    }
+
+    fn extract_fmt_chunk(&self, input: &[u8]) -> R<Vec<u8>> {
+        let mut cursor = Cursor::new(input);
+        cursor.seek(SeekFrom::Start(12))?; // Skip RIFF header
+
+        while cursor.position() < input.len() as u64 {
+            let _chunk_start = cursor.position() as usize;
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<LittleEndian>()? as usize;
+            
+            if &chunk_id == b"fmt " {
+                let chunk_end = cursor.position() as usize + chunk_size;
+                let mut result = Vec::new();
+                result.extend_from_slice(&chunk_id); // chunk ID
+                result.extend_from_slice(&(chunk_size as u32).to_le_bytes()); // size
+                result.extend_from_slice(&input[cursor.position() as usize..chunk_end]); // data
+                if chunk_size % 2 == 1 {
+                    result.push(0); // Padding
+                }
+                return Ok(result);
+            }
+
+            // Skip to next chunk
+            cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+            if chunk_size % 2 == 1 {
+                cursor.seek(SeekFrom::Current(1))?; // Padding
+            }
+        }
+
+        Err(anyhow!("No fmt chunk found"))
+    }
+
+    fn create_metadata_chunks(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        let mut chunks = Vec::new();
+
+        // Create BEXT chunk
+        let bext_data = self.create_bext_chunk_data(metadata)?;
+        if !bext_data.is_empty() {
+            chunks.extend_from_slice(b"bext");
+            chunks.extend_from_slice(&(bext_data.len() as u32).to_le_bytes());
+            chunks.extend_from_slice(&bext_data);
+            if bext_data.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // Create iXML chunk
+        let ixml_content = self.create_ixml(metadata)?;
+        if !ixml_content.trim().is_empty() {
+            let ixml_bytes = ixml_content.as_bytes();
+            chunks.extend_from_slice(b"iXML");
+            chunks.extend_from_slice(&(ixml_bytes.len() as u32).to_le_bytes());
+            chunks.extend_from_slice(ixml_bytes);
+            if ixml_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // Create image chunks
+        for image in metadata.get_images() {
+            chunks.extend_from_slice(b"APIC");
+            chunks.extend_from_slice(&(image.data.len() as u32).to_le_bytes());
+            chunks.extend_from_slice(&image.data);
+            if image.data.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        Ok(chunks)
+    }
+
+    fn create_bext_chunk_data(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        let mut bext_data = vec![0u8; 602]; // BWF spec minimum size
+
+        // Description (256 bytes)
+        if let Some(description) = metadata
+            .get_field("DESCRIPTION")
+            .or_else(|| metadata.get_field("BEXT_BWF_DESCRIPTION"))
+            .or_else(|| metadata.get_field("Description"))
+        {
+            let bytes = description.as_bytes();
+            let len = std::cmp::min(bytes.len(), 255);
+            bext_data[..len].copy_from_slice(&bytes[..len]);
+        }
+
+        // Originator (32 bytes)
+        if let Some(originator) = metadata
+            .get_field("USER_DESIGNER")
+            .or_else(|| metadata.get_field("BEXT_BWF_ORIGINATOR"))
+        {
+            let bytes = originator.as_bytes();
+            let len = std::cmp::min(bytes.len(), 31);
+            bext_data[256..256 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginatorReference (32 bytes)
+        if let Some(orig_ref) = metadata.get_field("BEXT_BWF_ORIGINATOR_REFERENCE") {
+            let bytes = orig_ref.as_bytes();
+            let len = std::cmp::min(bytes.len(), 31);
+            bext_data[288..288 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginationDate (10 bytes)
+        if let Some(date) = metadata.get_field("OriginationDate") {
+            let bytes = date.as_bytes();
+            let len = std::cmp::min(bytes.len(), 10);
+            bext_data[320..320 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // OriginationTime (8 bytes)
+        if let Some(time) = metadata.get_field("OriginationTime") {
+            let bytes = time.as_bytes();
+            let len = std::cmp::min(bytes.len(), 8);
+            bext_data[330..330 + len].copy_from_slice(&bytes[..len]);
+        }
+
+        // TimeReference (8 bytes)
+        if let Some(time_ref) = metadata.get_field("TimeReference") {
+            if let Ok(time_ref_val) = time_ref.parse::<u64>() {
+                (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
+            }
+        }
+
+        Ok(bext_data)
+    }
+
     fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
         let mut output = Cursor::new(Vec::new());
 

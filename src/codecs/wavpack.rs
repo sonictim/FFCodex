@@ -491,6 +491,10 @@ impl Codec for WvCodec {
         "wv"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn validate_file_format(&self, data: &[u8]) -> R<()> {
         // WavPack files start with "wvpk" signature
         if data.len() < 4 {
@@ -585,6 +589,217 @@ impl Codec for WvCodec {
     }
 
     fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>> {
+        self.encode_with_metadata(buffer, &None)
+    }
+
+    fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {
+        let mut metadata = Metadata::new();
+        let decoder = WavpackDecoder::new(input)?;
+
+        // Extract text tags
+        let num_tags = unsafe { WavpackGetNumTagItems(decoder.context) };
+        dprintln!("WavPack parse_metadata: Found {} text tags", num_tags);
+
+        for i in 0..num_tags {
+            let mut item_buffer = vec![0u8; 256];
+            let result = unsafe {
+                WavpackGetTagItemIndexed(
+                    decoder.context,
+                    i as c_int,
+                    item_buffer.as_mut_ptr() as *mut c_char,
+                    item_buffer.len() as c_int,
+                )
+            };
+
+            if result > 0 {
+                let item_name = String::from_utf8_lossy(&item_buffer[..result as usize]);
+                let mut value_buffer = vec![0u8; 1024];
+                let value_result = unsafe {
+                    WavpackGetTagItem(
+                        decoder.context,
+                        item_name.as_ptr() as *const c_char,
+                        value_buffer.as_mut_ptr() as *mut c_char,
+                        value_buffer.len() as c_int,
+                    )
+                };
+
+                if value_result > 0 {
+                    let value = String::from_utf8_lossy(&value_buffer[..value_result as usize]);
+                    dprintln!(
+                        "WavPack parse_metadata: Found tag '{}' = '{}'",
+                        item_name,
+                        value
+                    );
+                    // Special handling for iXML content
+                    if item_name.to_uppercase() == "IXML" {
+                        metadata.parse_ixml(&value)?;
+                    } else {
+                        // Map common WavPack tag names to standard names with TAG_ prefix
+                        let standard_key = self.normalize_wavpack_key(&item_name);
+                        let prefixed_key = format!("TAG_{}", standard_key);
+                        metadata.set_field(&prefixed_key, &value)?;
+                    }
+                }
+            }
+        }
+
+        // Extract binary tags
+        let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(decoder.context) };
+        dprintln!(
+            "WavPack parse_metadata: Found {} binary tags",
+            num_binary_tags
+        );
+
+        for i in 0..num_binary_tags {
+            let mut item_buffer = vec![0u8; 256];
+            let result = unsafe {
+                WavpackGetBinaryTagItemIndexed(
+                    decoder.context,
+                    i as c_int,
+                    item_buffer.as_mut_ptr() as *mut c_char,
+                    item_buffer.len() as c_int,
+                )
+            };
+
+            if result > 0 {
+                let item_name = String::from_utf8_lossy(&item_buffer[..result as usize]);
+                let binary_size = unsafe {
+                    WavpackGetBinaryTagItem(
+                        decoder.context,
+                        item_name.as_ptr() as *const c_char,
+                        ptr::null_mut(),
+                        0,
+                    )
+                };
+
+                if binary_size > 0 {
+                    let mut binary_data = vec![0u8; binary_size as usize];
+                    let binary_result = unsafe {
+                        WavpackGetBinaryTagItem(
+                            decoder.context,
+                            item_name.as_ptr() as *const c_char,
+                            binary_data.as_mut_ptr() as *mut c_char,
+                            binary_size,
+                        )
+                    };
+
+                    if binary_result > 0 {
+                        dprintln!(
+                            "WavPack parse_metadata: Found binary tag '{}' ({} bytes)",
+                            item_name,
+                            binary_data.len()
+                        );
+
+                        match item_name.as_ref() {
+                            "Cover Art (Front)" | "APIC" => {
+                                // Image data
+                                let mime_type = detect_image_mime_type(&binary_data);
+                                let image_chunk = ImageChunk::new(
+                                    mime_type,
+                                    "Cover Art".to_string(),
+                                    binary_data,
+                                );
+                                metadata.add_image(image_chunk);
+                            }
+                            _ => {
+                                // For other binary tags, try to parse as text if possible
+                                if let Ok(text_data) = String::from_utf8(binary_data) {
+                                    if !text_data.trim().is_empty() {
+                                        metadata.set_field(&item_name, &text_data)?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract format information for metadata completion
+        let channels = unsafe { WavpackGetNumChannels(decoder.context) };
+        let sample_rate = unsafe { WavpackGetSampleRate(decoder.context) };
+        let bits_per_sample = unsafe { WavpackGetBitsPerSample(decoder.context) };
+
+        metadata.channels = channels as u16;
+        metadata.sample_rate = sample_rate;
+        metadata.bit_depth = bits_per_sample as u16;
+        metadata.format_tag = 0xFFFF; // WavPack's own format tag
+
+        // Extract wrapper data if present
+        if unsafe { WavpackGetWrapperBytes(decoder.context) } > 0 {
+            let wrapper_size = unsafe { WavpackGetWrapperBytes(decoder.context) };
+            let wrapper_data = unsafe { 
+                let ptr = WavpackGetWrapperData(decoder.context);
+                if !ptr.is_null() {
+                    std::slice::from_raw_parts(ptr, wrapper_size as usize).to_vec()
+                } else {
+                    Vec::new()
+                }
+            };
+
+            if !wrapper_data.is_empty() {
+                dprintln!(
+                    "WavPack parse_metadata: Found wrapper data ({} bytes)",
+                    wrapper_data.len()
+                );
+                self.parse_wrapper_metadata(&mut metadata, &wrapper_data)?;
+            }
+        }
+
+        Ok(metadata)
+    }
+
+    fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+        // For WavPack, we need to decode, add metadata, and re-encode
+        let file = std::fs::File::open(file_path)?;
+        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+
+        // First, decode the WavPack file to get the audio data
+        let audio_buffer = self.decode(&mapped_file)?;
+
+        // Create a new encoder with the same parameters
+        let sample_rate = audio_buffer.sample_rate;
+        let channels = audio_buffer.channels;
+        let bits_per_sample = match audio_buffer.format {
+            SampleFormat::U8 => 8,
+            SampleFormat::I16 => 16,
+            SampleFormat::I24 => 24,
+            SampleFormat::I32 => 32,
+            SampleFormat::F32 => 32,
+        };
+        let is_float = audio_buffer.format == SampleFormat::F32;
+        let lossless = true;
+        let total_samples = audio_buffer.data[0].len() as u64;
+
+        let mut encoder =
+            WavpackEncoder::new(sample_rate, channels, bits_per_sample, is_float, lossless)?;
+
+        encoder.init()?;
+
+        // Add metadata to the encoder context before encoding
+        self.add_metadata_to_encoder(&mut encoder, metadata)?;
+
+        // Verify metadata was added to context
+        let text_tags = unsafe { WavpackGetNumTagItems(encoder.context) };
+        let binary_tags = unsafe { WavpackGetNumBinaryTagItems(encoder.context) };
+        dprintln!(
+            "WavPack embed_metadata_to_file: After adding metadata - context has {} text tags and {} binary tags",
+            text_tags,
+            binary_tags
+        );
+
+        // Encode with the metadata
+        let result = encoder.encode(&audio_buffer, total_samples, &Some(metadata))?;
+
+        // Write the result back to the file
+        std::fs::write(file_path, result)?;
+        Ok(())
+    }
+}
+
+impl WvCodec {
+    /// Encode with optional metadata - avoids double encoding for WavPack
+    pub fn encode_with_metadata(&self, buffer: &Option<AudioBuffer>, metadata: &Option<&Metadata>) -> R<Vec<u8>> {
         let Some(buffer) = buffer else {
             return Err(anyhow!("Cannot encode None AudioBuffer"));
         };
@@ -617,8 +832,13 @@ impl Codec for WvCodec {
 
         encoder.init()?;
 
-        // Encode the audio buffer (no metadata for plain encode)
-        encoder.encode(buffer, total_samples, &None)
+        // Add metadata to encoder context if provided
+        if let Some(metadata) = metadata {
+            self.add_metadata_to_encoder(&mut encoder, metadata)?;
+        }
+
+        // Encode the audio buffer with metadata
+        encoder.encode(buffer, total_samples, metadata)
     }
 
     fn parse_metadata(&self, input: &[u8]) -> R<Metadata> {

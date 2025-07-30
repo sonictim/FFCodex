@@ -286,16 +286,44 @@ impl Codex {
 
         match get_codec(output_file) {
             Ok(codec) => {
-                // Encode the audio first
-                codec.encode_file(&self.buffer, temp_path)?;
+                // Check if this is a WavPack file and we have metadata - optimize for single encoding
+                let extension = std::path::Path::new(output_file)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
 
-                // Embed metadata if available, updating it with current buffer info
-                if let Some(metadata) = &self.metadata {
-                    if let Some(buffer) = &self.buffer {
-                        let updated_metadata = self.update_metadata_from_buffer(metadata, buffer);
-                        codec.embed_metadata_to_file(temp_path, &updated_metadata)?;
+                if extension == "wv" && self.metadata.is_some() {
+                    // WavPack optimization: encode with metadata in one pass
+                    let final_metadata = if let Some(buffer) = &self.buffer {
+                        Some(self.update_metadata_from_buffer(self.metadata.as_ref().unwrap(), buffer))
                     } else {
-                        codec.embed_metadata_to_file(temp_path, metadata)?;
+                        self.metadata.clone()
+                    };
+
+                    // Cast to WvCodec to access encode_with_metadata
+                    if let Some(wv_codec) = codec.as_any().downcast_ref::<crate::codecs::WvCodec>() {
+                        let encoded_data = wv_codec.encode_with_metadata(&self.buffer, &final_metadata.as_ref())?;
+                        std::fs::write(temp_path, encoded_data)?;
+                    } else {
+                        // Fallback to standard approach
+                        codec.encode_file(&self.buffer, temp_path)?;
+                        if let Some(metadata) = &final_metadata {
+                            codec.embed_metadata_to_file(temp_path, metadata)?;
+                        }
+                    }
+                } else {
+                    // Standard approach for other formats
+                    codec.encode_file(&self.buffer, temp_path)?;
+
+                    // Embed metadata if available, updating it with current buffer info
+                    if let Some(metadata) = &self.metadata {
+                        if let Some(buffer) = &self.buffer {
+                            let updated_metadata = self.update_metadata_from_buffer(metadata, buffer);
+                            codec.embed_metadata_to_file(temp_path, &updated_metadata)?;
+                        } else {
+                            codec.embed_metadata_to_file(temp_path, metadata)?;
+                        }
                     }
                 }
             }
@@ -381,6 +409,7 @@ pub trait Codec: Send + Sync {
     fn validate_file_format(&self, data: &[u8]) -> R<()>;
     fn file_extension(&self) -> &'static str;
     fn get_file_info(&self, file_path: &str) -> R<FileInfo>;
+    fn as_any(&self) -> &dyn std::any::Any;
     fn encode(&self, buffer: &Option<AudioBuffer>) -> R<Vec<u8>>;
     fn encode_file(&self, buffer: &Option<AudioBuffer>, file_path: &str) -> R<()> {
         let encoded_data = self.encode(buffer)?;

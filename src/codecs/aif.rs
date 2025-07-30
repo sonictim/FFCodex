@@ -37,6 +37,10 @@ impl Codec for AifCodec {
         "aif"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn validate_file_format(&self, data: &[u8]) -> R<()> {
         if data.len() < MIN_VALID_FILE_SIZE {
             return Err(anyhow!("File too small to be a valid AIFF"));
@@ -488,20 +492,219 @@ impl Codec for AifCodec {
     }
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
-        // Read the existing file
-        let file = std::fs::File::open(file_path)?;
-        let mapped_file = unsafe { MmapOptions::new().map(&file)? };
+        use std::fs::OpenOptions;
+        use std::io::{Read, Seek, SeekFrom, Write};
 
-        // Create new data with metadata embedded
-        let new_data = self.embed_metadata_from_hashmap(&mapped_file, metadata)?;
+        // Open file for read/write
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file_path)?;
 
-        // Write the data back to the file
-        std::fs::write(file_path, new_data)?;
+        // Read entire file to analyze structure
+        let mut file_data = Vec::new();
+        file.read_to_end(&mut file_data)?;
+
+        // Find audio data chunks and preserve them
+        let audio_chunks = self.extract_audio_chunks(&file_data)?;
+        
+        // Create new metadata chunks
+        let metadata_chunks = self.create_aif_metadata_chunks(metadata)?;
+
+        // Build new file structure: FORM header + COMM + metadata chunks + audio chunks
+        let mut new_file_data = Vec::new();
+        
+        // Copy FORM/AIFF header (12 bytes)
+        new_file_data.extend_from_slice(&file_data[0..12]);
+        
+        // Copy COMM chunk (find and copy it)
+        let comm_chunk = self.extract_comm_chunk(&file_data)?;
+        new_file_data.extend_from_slice(&comm_chunk);
+        
+        // Add metadata chunks
+        new_file_data.extend_from_slice(&metadata_chunks);
+        
+        // Add preserved audio chunks
+        new_file_data.extend_from_slice(&audio_chunks);
+
+        // Update FORM size (total size - 8 bytes for FORM header)
+        let total_size = (new_file_data.len() - 8) as u32;
+        new_file_data[4..8].copy_from_slice(&total_size.to_be_bytes());
+
+        // Write the new data back to file
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&new_file_data)?;
+        file.set_len(new_file_data.len() as u64)?;
+        
         Ok(())
     }
 }
 
 impl AifCodec {
+    fn extract_audio_chunks(&self, input: &[u8]) -> R<Vec<u8>> {
+        let mut cursor = Cursor::new(input);
+        cursor.seek(SeekFrom::Start(12))?; // Skip FORM header
+        
+        let mut audio_chunks = Vec::new();
+
+        while cursor.position() < input.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<BigEndian>()? as usize;
+            let _chunk_start = cursor.position() as usize;
+            
+            // Keep audio data chunks (SSND), skip metadata and COMM chunks
+            match &chunk_id {
+                b"SSND" => {
+                    // This is audio data - preserve it
+                    let mut chunk_data = Vec::new();
+                    chunk_data.extend_from_slice(&chunk_id); // chunk ID
+                    chunk_data.extend_from_slice(&(chunk_size as u32).to_be_bytes()); // size
+                    
+                    let mut data = vec![0u8; chunk_size];
+                    cursor.read_exact(&mut data)?;
+                    chunk_data.extend_from_slice(&data);
+                    
+                    // Handle padding
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        chunk_data.push(0);
+                    }
+                    
+                    audio_chunks.extend_from_slice(&chunk_data);
+                }
+                b"COMM" | b"NAME" | b"AUTH" | b"(c) " | b"ANNO" | b"APPL" | b"iXML" => {
+                    // Skip metadata chunks - we'll recreate these
+                    cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                    }
+                }
+                _ => {
+                    // Keep other chunks as-is
+                    let mut chunk_data = Vec::new();
+                    chunk_data.extend_from_slice(&chunk_id);
+                    chunk_data.extend_from_slice(&(chunk_size as u32).to_be_bytes());
+                    
+                    let mut data = vec![0u8; chunk_size];
+                    cursor.read_exact(&mut data)?;
+                    chunk_data.extend_from_slice(&data);
+                    
+                    if chunk_size % 2 == 1 {
+                        cursor.seek(SeekFrom::Current(1))?;
+                        chunk_data.push(0);
+                    }
+                    
+                    audio_chunks.extend_from_slice(&chunk_data);
+                }
+            }
+        }
+
+        Ok(audio_chunks)
+    }
+
+    fn extract_comm_chunk(&self, input: &[u8]) -> R<Vec<u8>> {
+        let mut cursor = Cursor::new(input);
+        cursor.seek(SeekFrom::Start(12))?; // Skip FORM header
+
+        while cursor.position() < input.len() as u64 {
+            let mut chunk_id = [0u8; 4];
+            if cursor.read(&mut chunk_id)? < 4 {
+                break;
+            }
+
+            let chunk_size = cursor.read_u32::<BigEndian>()? as usize;
+            
+            if &chunk_id == b"COMM" {
+                let mut result = Vec::new();
+                result.extend_from_slice(&chunk_id); // chunk ID
+                result.extend_from_slice(&(chunk_size as u32).to_be_bytes()); // size
+                
+                let mut chunk_data = vec![0u8; chunk_size];
+                cursor.read_exact(&mut chunk_data)?;
+                result.extend_from_slice(&chunk_data);
+                
+                if chunk_size % 2 == 1 {
+                    result.push(0); // Padding
+                }
+                return Ok(result);
+            }
+
+            // Skip to next chunk
+            cursor.seek(SeekFrom::Current(chunk_size as i64))?;
+            if chunk_size % 2 == 1 {
+                cursor.seek(SeekFrom::Current(1))?; // Padding
+            }
+        }
+
+        Err(anyhow!("No COMM chunk found"))
+    }
+
+    fn create_aif_metadata_chunks(&self, metadata: &Metadata) -> R<Vec<u8>> {
+        let mut chunks = Vec::new();
+
+        // NAME chunk
+        if let Some(name) = metadata.get_field("NAME") {
+            let name_bytes = name.as_bytes();
+            chunks.extend_from_slice(b"NAME");
+            chunks.extend_from_slice(&(name_bytes.len() as u32).to_be_bytes());
+            chunks.extend_from_slice(name_bytes);
+            if name_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // AUTH chunk (Author)
+        if let Some(auth) = metadata.get_field("AUTH") {
+            let auth_bytes = auth.as_bytes();
+            chunks.extend_from_slice(b"AUTH");
+            chunks.extend_from_slice(&(auth_bytes.len() as u32).to_be_bytes());
+            chunks.extend_from_slice(auth_bytes);
+            if auth_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // (c) chunk (Copyright)
+        if let Some(copyright) = metadata.get_field("(c) ") {
+            let copyright_bytes = copyright.as_bytes();
+            chunks.extend_from_slice(b"(c) ");
+            chunks.extend_from_slice(&(copyright_bytes.len() as u32).to_be_bytes());
+            chunks.extend_from_slice(copyright_bytes);
+            if copyright_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // ANNO chunk (Annotation)
+        if let Some(anno) = metadata.get_field("ANNO") {
+            let anno_bytes = anno.as_bytes();
+            chunks.extend_from_slice(b"ANNO");
+            chunks.extend_from_slice(&(anno_bytes.len() as u32).to_be_bytes());
+            chunks.extend_from_slice(anno_bytes);
+            if anno_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        // iXML chunk
+        let ixml_content = self.create_ixml(metadata)?;
+        if !ixml_content.trim().is_empty() {
+            let ixml_bytes = ixml_content.as_bytes();
+            chunks.extend_from_slice(b"iXML");
+            chunks.extend_from_slice(&(ixml_bytes.len() as u32).to_be_bytes());
+            chunks.extend_from_slice(ixml_bytes);
+            if ixml_bytes.len() % 2 == 1 {
+                chunks.push(0); // Padding
+            }
+        }
+
+        Ok(chunks)
+    }
+
     fn embed_metadata_from_hashmap(&self, input: &[u8], metadata: &Metadata) -> R<Vec<u8>> {
         let mut cursor = Cursor::new(input);
         let mut output = Cursor::new(Vec::new());
