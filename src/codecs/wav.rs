@@ -646,6 +646,11 @@ impl Codec for WavCodec {
             .write(true)
             .open(file_path)?;
 
+        // Check write permissions early by testing file.set_len() with current size
+        let current_size = file.metadata()?.len();
+        file.set_len(current_size)
+            .map_err(|e| anyhow!("No write permission for file '{}': {}", file_path, e))?;
+
         // Read only the header to analyze file structure (not the entire file!)
         let mut header_buffer = vec![0u8; 8192]; // Read first 8KB for header analysis
         let header_bytes_read = file.read(&mut header_buffer)?;
@@ -679,8 +684,8 @@ impl Codec for WavCodec {
             // Perfect fit or smaller - can do true in-place update
             self.update_metadata_in_place(&mut file, metadata_insert_pos, &new_metadata, data_chunk)?;
         } else {
-            // Size changed - need to move data chunk
-            self.update_metadata_with_move(&mut file, &chunks, metadata_insert_pos, &new_metadata, size_diff)?;
+            // Size changed - use fixed append-at-end strategy (keeps data intact!)
+            self.update_metadata_append_strategy(&mut file, &chunks, &new_metadata)?;
         }
         
         Ok(())
@@ -864,16 +869,29 @@ impl WavCodec {
     ) -> R<()> {
         use std::io::{Read, Seek, SeekFrom, Write};
 
-        // Move data in chunks to avoid loading entire file into memory
-        const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
         let data_size = data_chunk.size as u64;
+        
+        // Move data in chunks to avoid loading entire file into memory
+        // Use larger buffers for big files to reduce I/O operations
+        let buffer_size = if data_size > 500 * 1024 * 1024 { // > 500MB
+            64 * 1024 * 1024 // 64MB buffer for large files
+        } else if data_size > 100 * 1024 * 1024 { // > 100MB
+            16 * 1024 * 1024 // 16MB buffer for medium files
+        } else {
+            4 * 1024 * 1024  // 4MB buffer for smaller files
+        };
         let old_data_start = data_chunk.start_position;
         let new_data_start = old_data_start + growth;
+
+        // Check if we have enough disk space for the operation
+        if let Err(e) = file.set_len(new_data_start + data_size) {
+            return Err(anyhow!("Cannot extend file - check disk space and write permissions: {}", e));
+        }
 
         // Move data from end to beginning to avoid overwriting
         let mut remaining = data_size;
         while remaining > 0 {
-            let chunk_size = std::cmp::min(remaining, BUFFER_SIZE as u64) as usize;
+            let chunk_size = std::cmp::min(remaining, buffer_size as u64) as usize;
             let offset = remaining - chunk_size as u64;
             
             // Read chunk from original position
@@ -927,11 +945,18 @@ impl WavCodec {
         file.write_all(b"data")?;
         file.write_all(&(data_chunk.size).to_le_bytes())?;
 
-        // Move data forward in chunks
-        const BUFFER_SIZE: usize = 1024 * 1024; // 1MB buffer
+        // Move data forward in chunks with optimized buffer sizes
+        let buffer_size = if data_size > 500 * 1024 * 1024 { // > 500MB
+            64 * 1024 * 1024 // 64MB buffer for large files
+        } else if data_size > 100 * 1024 * 1024 { // > 100MB
+            16 * 1024 * 1024 // 16MB buffer for medium files
+        } else {
+            4 * 1024 * 1024  // 4MB buffer for smaller files
+        };
+        
         let mut moved = 0u64;
         while moved < data_size {
-            let chunk_size = std::cmp::min(data_size - moved, BUFFER_SIZE as u64) as usize;
+            let chunk_size = std::cmp::min(data_size - moved, buffer_size as u64) as usize;
             
             // Read from old position
             file.seek(SeekFrom::Start(old_data_start + moved))?;
@@ -959,6 +984,37 @@ impl WavCodec {
 
         file.seek(SeekFrom::Start(4))?;
         file.write_all(&riff_size.to_le_bytes())?;
+
+        Ok(())
+    }
+
+    fn update_metadata_append_strategy(
+        &self,
+        file: &mut std::fs::File,
+        chunks: &[WavChunk],
+        new_metadata: &[u8],
+    ) -> R<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        // Strategy: Keep existing structure intact, append metadata at end
+        // Layout: RIFF + fmt + [old metadata space] + data + NEW metadata (at end)
+        
+        let data_chunk = chunks.iter()
+            .find(|chunk| &chunk.id == b"data")
+            .ok_or_else(|| anyhow!("No data chunk found"))?;
+
+        // The audio data and everything before it stays exactly where it is
+        // We just append new metadata after the data chunk
+        let append_position = data_chunk.end_position;
+
+        // Append new metadata chunks at the end
+        file.seek(SeekFrom::Start(append_position))?;
+        file.write_all(new_metadata)?;
+        
+        // Update file size and RIFF header
+        let new_file_size = append_position + new_metadata.len() as u64;
+        file.set_len(new_file_size)?;
+        self.update_riff_size(file)?;
 
         Ok(())
     }

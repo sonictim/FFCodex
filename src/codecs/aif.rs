@@ -590,6 +590,11 @@ impl Codec for AifCodec {
             .write(true)
             .open(file_path)?;
 
+        // Check write permissions early by testing file.set_len() with current size
+        let current_size = file.metadata()?.len();
+        file.set_len(current_size)
+            .map_err(|e| anyhow!("No write permission for file '{}': {}", file_path, e))?;
+
         // Parse AIF structure from file
         let chunks = self.parse_aif_structure(&mut file)?;
         
@@ -618,8 +623,8 @@ impl Codec for AifCodec {
             // Perfect fit or smaller - can do true in-place update
             self.update_aif_metadata_in_place(&mut file, metadata_insert_pos, &new_metadata, ssnd_chunk)?;
         } else {
-            // Size changed - need to move SSND chunk
-            self.update_aif_metadata_with_move(&mut file, &chunks, metadata_insert_pos, &new_metadata, size_diff)?;
+            // Size changed - use append-at-end strategy (keeps audio data intact!)
+            self.update_aif_metadata_append_strategy(&mut file, &chunks, &new_metadata)?;
         }
         
         Ok(())
@@ -892,6 +897,37 @@ impl AifCodec {
 
         file.seek(SeekFrom::Start(4))?;
         file.write_all(&form_size.to_be_bytes())?;
+
+        Ok(())
+    }
+
+    fn update_aif_metadata_append_strategy(
+        &self,
+        file: &mut std::fs::File,
+        chunks: &[AifChunk],
+        new_metadata: &[u8],
+    ) -> R<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        // Strategy: Keep existing structure intact, append metadata at end
+        // Layout: FORM + COMM + [old metadata space] + SSND + [audio data] + NEW metadata (at end)
+        
+        let ssnd_chunk = chunks.iter()
+            .find(|chunk| &chunk.id == b"SSND")
+            .ok_or_else(|| anyhow!("No SSND chunk found"))?;
+
+        // The audio data and everything before it stays exactly where it is
+        // We just append new metadata after the SSND chunk
+        let append_position = ssnd_chunk.end_position;
+
+        // Append new metadata chunks at the end
+        file.seek(SeekFrom::Start(append_position))?;
+        file.write_all(new_metadata)?;
+        
+        // Update file size and FORM header
+        let new_file_size = append_position + new_metadata.len() as u64;
+        file.set_len(new_file_size)?;
+        self.update_form_size(file)?;
 
         Ok(())
     }

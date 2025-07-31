@@ -568,6 +568,13 @@ impl Codec for FlacCodec {
     }
 
     fn embed_metadata_to_file(&self, file_path: &str, metadata: &Metadata) -> R<()> {
+        // Check write permissions early by testing file open for write
+        use std::fs::OpenOptions;
+        let _test_file = OpenOptions::new()
+            .write(true)
+            .open(file_path)
+            .map_err(|e| anyhow!("No write permission for file '{}': {}", file_path, e))?;
+        
         // Use metaflac to safely write metadata blocks
         let mut dest_tag = Tag::read_from_path(file_path).unwrap_or_else(|_| Tag::new());
 
