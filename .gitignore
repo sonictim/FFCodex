@@ -21,8 +21,14 @@
 *.swp
 *.swo
 *~
+.claude/
+
 
 # Temporary files
 *.tmp
 *.bak
 .DS_Store
+Desktop.ini
+
+
+
