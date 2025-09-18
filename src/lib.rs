@@ -8,32 +8,33 @@ mod prelude;
 use crate::prelude::*;
 pub mod bindings;
 mod chromaprint;
+pub mod playback;
 pub mod resample;
 pub mod soundminer;
 
 // Standard bit depths
-const BIT_DEPTH_8: u16 = 8;
-const BIT_DEPTH_16: u16 = 16;
-const BIT_DEPTH_24: u16 = 24;
-const BIT_DEPTH_32: u16 = 32;
+// const BIT_DEPTH_8: u16 = 8;
+// const BIT_DEPTH_16: u16 = 16;
+// const BIT_DEPTH_24: u16 = 24;
+// const BIT_DEPTH_32: u16 = 32;
 
 // Sample normalization constants
-const U8_OFFSET: f32 = 128.0;
-const U8_SCALE: f32 = 127.0;
-const I16_MAX_F: f32 = 32767.0;
-const I16_DIVISOR: f32 = 32768.0;
-const I16_DIVISOR_RECIP: f32 = 1.0 / 32768.0; // Pre-calculated reciprocal
-const I24_MAX_F: f32 = 8388607.0;
-const I24_DIVISOR: f32 = 8388608.0;
-const I24_DIVISOR_RECIP: f32 = 1.0 / 8388608.0; // Pre-calculated reciprocal
-const I32_MAX_F: f32 = 2147483647.0;
-const I32_DIVISOR: f32 = 2147483648.0;
-const I32_DIVISOR_RECIP: f32 = 1.0 / 2147483648.0; // Pre-calculated reciprocal
+// const U8_OFFSET: f32 = 128.0;
+// const U8_SCALE: f32 = 127.0;
+// const I16_MAX_F: f32 = 32767.0;
+// const I16_DIVISOR: f32 = 32768.0;
+// const I16_DIVISOR_RECIP: f32 = 1.0 / 32768.0; // Pre-calculated reciprocal
+// const I24_MAX_F: f32 = 8388607.0;
+// const I24_DIVISOR: f32 = 8388608.0;
+// const I24_DIVISOR_RECIP: f32 = 1.0 / 8388608.0; // Pre-calculated reciprocal
+// const I32_MAX_F: f32 = 2147483647.0;
+// const I32_DIVISOR: f32 = 2147483648.0;
+// const I32_DIVISOR_RECIP: f32 = 1.0 / 2147483648.0; // Pre-calculated reciprocal
 
 //Bit Operations
-const I24_SIGN_BIT: i32 = 0x800000;
-const I24_SIGN_EXTENSION_MASK: i32 = !0xFFFFFF;
-const BYTE_MASK: i32 = 0xFF; // Mask for extracting a single byte
+// const I24_SIGN_BIT: i32 = 0x800000;
+// const I24_SIGN_EXTENSION_MASK: i32 = !0xFFFFFF;
+// const BYTE_MASK: i32 = 0xFF; // Mask for extracting a single byte
 
 pub fn debug_println(args: std::fmt::Arguments) {
     if cfg!(debug_assertions) {
@@ -295,15 +296,21 @@ impl Codex {
 
                 if extension == "wv" && self.metadata.is_some() {
                     // WavPack optimization: encode with metadata in one pass
-                    let final_metadata = if let Some(buffer) = &self.buffer {
-                        Some(self.update_metadata_from_buffer(self.metadata.as_ref().unwrap(), buffer))
-                    } else {
-                        self.metadata.clone()
-                    };
+                    let final_metadata =
+                        if let Some(buffer) = &self.buffer {
+                            Some(self.update_metadata_from_buffer(
+                                self.metadata.as_ref().unwrap(),
+                                buffer,
+                            ))
+                        } else {
+                            self.metadata.clone()
+                        };
 
                     // Cast to WvCodec to access encode_with_metadata
-                    if let Some(wv_codec) = codec.as_any().downcast_ref::<crate::codecs::WvCodec>() {
-                        let encoded_data = wv_codec.encode_with_metadata(&self.buffer, &final_metadata.as_ref())?;
+                    if let Some(wv_codec) = codec.as_any().downcast_ref::<crate::codecs::WvCodec>()
+                    {
+                        let encoded_data = wv_codec
+                            .encode_with_metadata(&self.buffer, &final_metadata.as_ref())?;
                         std::fs::write(temp_path, encoded_data)?;
                     } else {
                         // Fallback to standard approach
@@ -319,7 +326,8 @@ impl Codex {
                     // Embed metadata if available, updating it with current buffer info
                     if let Some(metadata) = &self.metadata {
                         if let Some(buffer) = &self.buffer {
-                            let updated_metadata = self.update_metadata_from_buffer(metadata, buffer);
+                            let updated_metadata =
+                                self.update_metadata_from_buffer(metadata, buffer);
                             codec.embed_metadata_to_file(temp_path, &updated_metadata)?;
                         } else {
                             codec.embed_metadata_to_file(temp_path, metadata)?;

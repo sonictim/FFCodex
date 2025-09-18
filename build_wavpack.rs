@@ -19,7 +19,7 @@ pub fn build() {
         if !downloaded_dir.exists() {
             println!("cargo:warning=Cloning WavPack repository...");
             let status = Command::new("git")
-                .args(&[
+                .args([
                     "clone",
                     "--depth", "1", // Shallow clone for faster downloads
                     "https://github.com/dbry/WavPack.git",
@@ -78,7 +78,7 @@ pub fn build() {
     // Define compile flags
     config.define("PACKAGE_VERSION", "\"5.6.0\""); // Adjust version as needed
     config.define("_FILE_OFFSET_BITS", "64");
-    
+
     // Suppress C compiler warnings
     config.flag("-w"); // Suppress all warnings
     config.flag("-Wno-sign-compare"); // Suppress sign comparison warnings specifically

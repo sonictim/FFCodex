@@ -1,6 +1,6 @@
 [package]
 name = "FFcodex"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 build = "build.rs"
 
@@ -17,6 +17,7 @@ anyhow = "1.0.98"
 base64 = "0.22.1"   # Used by chromaprint
 byteorder = "1.5.0"
 claxon = "0.4.3"    # FLAC decoding
+cpal = "0.16.0"
 flacenc = "0.4.0"   # FLAC encoding
 libc = "0.2"        # C memory management for wavpack/chromaprint
 memmap2 = "0.9.5"   # Memory mapped file I/O

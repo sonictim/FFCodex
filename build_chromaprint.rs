@@ -27,7 +27,7 @@ pub fn build() {
         if !downloaded_dir.exists() {
             println!("cargo:warning=Cloning chromaprint repository...");
             let status = Command::new("git")
-                .args(&[
+                .args([
                     "clone",
                     "--depth", "1", // Shallow clone for faster downloads
                     "https://github.com/acoustid/chromaprint.git",
@@ -72,7 +72,10 @@ pub fn build() {
     let chromaprint_lib_dir = cmake_config.build();
 
     // Tell cargo where to find the built library
-    println!("cargo:rustc-link-search=native={}/lib", chromaprint_lib_dir.display());
+    println!(
+        "cargo:rustc-link-search=native={}/lib",
+        chromaprint_lib_dir.display()
+    );
     println!("cargo:rustc-link-lib=static=chromaprint");
 
     // Link against platform-specific C++ runtime libraries
@@ -97,7 +100,7 @@ pub fn build() {
 fn generate_bindings(chromaprint_dir: &Path) {
     // Generate bindings for the chromaprint C API
     let header_path = chromaprint_dir.join("src/chromaprint.h");
-    
+
     let bindings = bindgen::Builder::default()
         .header(header_path.to_str().unwrap())
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -116,6 +119,9 @@ fn generate_bindings(chromaprint_dir: &Path) {
     bindings
         .write_to_file(out_path.join("chromaprint_bindings.rs"))
         .expect("Couldn't write chromaprint bindings!");
-    
-    println!("cargo:warning=Generated chromaprint bindings at {}/chromaprint_bindings.rs", out_path.display());
+
+    println!(
+        "cargo:warning=Generated chromaprint bindings at {}/chromaprint_bindings.rs",
+        out_path.display()
+    );
 }

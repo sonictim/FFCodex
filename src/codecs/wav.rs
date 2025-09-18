@@ -25,13 +25,13 @@ const BIT_DEPTH_32: u16 = 32;
 const U8_SCALE: f32 = 127.0;
 const U8_OFFSET: f32 = 128.0;
 const I16_MAX_F: f32 = 32767.0;
-const I16_DIVISOR: f32 = 32768.0;
+// const I16_DIVISOR: f32 = 32768.0;
 const I16_DIVISOR_RECIP: f32 = 1.0 / 32768.0;
 const I24_MAX_F: f32 = 8388607.0;
-const I24_DIVISOR: f32 = 8388608.0;
+// const I24_DIVISOR: f32 = 8388608.0;
 const I24_DIVISOR_RECIP: f32 = 1.0 / 8388608.0;
 const I32_MAX_F: f32 = 2147483647.0;
-const I32_DIVISOR: f32 = 2147483648.0;
+// const I32_DIVISOR: f32 = 2147483648.0;
 const I32_DIVISOR_RECIP: f32 = 1.0 / 2147483648.0;
 const I24_SIGN_BIT: i32 = 0x800000;
 const I24_SIGN_EXTENSION_MASK: i32 = -16777216; // 0xFF000000 as i32
@@ -54,88 +54,106 @@ impl Codec for WavCodec {
         // Optimized two-phase metadata extraction for WAV files
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
-        
+
         let mut file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
-        
+
         // Validate RIFF/WAVE header first
         let mut header = [0u8; 12];
         file.read_exact(&mut header)?;
         if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
             return Err(anyhow!("Not a valid WAV file"));
         }
-        
+
         let mut metadata = Metadata::new();
-        
+
         // PHASE 1: Read first 1MB (or until data chunk) for standard metadata
         let mut pos = 12u64;
         let first_phase_limit = std::cmp::min(file_size, 1024 * 1024); // 1MB limit
         let mut found_data_chunk = false;
         let mut data_chunk_start = 0u64;
-        
+
         while pos < first_phase_limit {
             file.seek(SeekFrom::Start(pos))?;
-            
+
             let mut chunk_header = [0u8; 8];
             if file.read_exact(&mut chunk_header).is_err() {
                 break;
             }
-            
+
             let chunk_id = &chunk_header[0..4];
-            let chunk_size = u32::from_le_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
-            
+            let chunk_size = u32::from_le_bytes([
+                chunk_header[4],
+                chunk_header[5],
+                chunk_header[6],
+                chunk_header[7],
+            ]) as u64;
+
             // Track data chunk location
             if chunk_id == b"data" {
                 found_data_chunk = true;
                 data_chunk_start = pos;
                 break; // Stop at data chunk for phase 1
             }
-            
+
             // Parse metadata chunks in phase 1
-            if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 { // Reasonable size limit
+            if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 {
+                // Reasonable size limit
                 let mut chunk_data = vec![0u8; chunk_size as usize];
                 if file.read_exact(&mut chunk_data).is_ok() {
                     self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
                 }
             }
-            
+
             // Move to next chunk (with padding)
             pos += 8 + chunk_size + (chunk_size % 2);
         }
-        
+
         // PHASE 2: Read last 1MB if file is large enough and we found a data chunk
-        if found_data_chunk && file_size > 2 * 1024 * 1024 { // Only for files > 2MB
-            let last_mb_start = std::cmp::max(data_chunk_start + 1024 * 1024, file_size - 1024 * 1024);
-            
+        if found_data_chunk && file_size > 2 * 1024 * 1024 {
+            // Only for files > 2MB
+            let last_mb_start =
+                std::cmp::max(data_chunk_start + 1024 * 1024, file_size - 1024 * 1024);
+
             if last_mb_start < file_size {
                 pos = last_mb_start;
-                
+
                 // Align to potential chunk boundary
                 file.seek(SeekFrom::Start(pos))?;
-                
+
                 while pos < file_size {
                     let mut chunk_header = [0u8; 8];
                     if file.read_exact(&mut chunk_header).is_err() {
                         break;
                     }
-                    
+
                     let chunk_id = &chunk_header[0..4];
-                    let chunk_size = u32::from_le_bytes([chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]]) as u64;
-                    
+                    let chunk_size = u32::from_le_bytes([
+                        chunk_header[4],
+                        chunk_header[5],
+                        chunk_header[6],
+                        chunk_header[7],
+                    ]) as u64;
+
                     // Parse any metadata chunks found at the end
-                    if self.is_valid_chunk_id(chunk_id) && chunk_size <= 16 * 1024 * 1024 && pos + 8 + chunk_size <= file_size {
+                    if self.is_valid_chunk_id(chunk_id)
+                        && chunk_size <= 16 * 1024 * 1024
+                        && pos + 8 + chunk_size <= file_size
+                    {
                         let mut chunk_data = vec![0u8; chunk_size as usize];
                         if file.read_exact(&mut chunk_data).is_ok() {
                             self.parse_metadata_chunk(chunk_id, &chunk_data, &mut metadata)?;
                         }
                     }
-                    
+
                     pos += 8 + chunk_size + (chunk_size % 2);
-                    if pos + 8 > file_size { break; } // Not enough space for another chunk header
+                    if pos + 8 > file_size {
+                        break;
+                    } // Not enough space for another chunk header
                 }
             }
         }
-        
+
         Ok(metadata)
     }
     fn as_str(&self) -> &'static str {
@@ -641,10 +659,7 @@ impl Codec for WavCodec {
         use std::io::Read;
 
         // Open file for read/write
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file_path)?;
+        let mut file = OpenOptions::new().read(true).write(true).open(file_path)?;
 
         // Check write permissions early by testing file.set_len() with current size
         let current_size = file.metadata()?.len();
@@ -658,23 +673,25 @@ impl Codec for WavCodec {
 
         // Parse WAV structure from header
         let chunks = self.parse_wav_structure(&mut file)?;
-        
+
         // Find data chunk location
-        let data_chunk = chunks.iter()
+        let data_chunk = chunks
+            .iter()
             .find(|chunk| &chunk.id == b"data")
             .ok_or_else(|| anyhow!("No data chunk found"))?;
 
         // Create new metadata chunks
         let new_metadata = self.create_metadata_chunks(metadata)?;
-        
+
         // Calculate new file layout
-        let fmt_chunk = chunks.iter()
+        let fmt_chunk = chunks
+            .iter()
             .find(|chunk| &chunk.id == b"fmt ")
             .ok_or_else(|| anyhow!("No fmt chunk found"))?;
 
         // New metadata insertion point (after fmt chunk)
         let metadata_insert_pos = fmt_chunk.end_position;
-        
+
         // Calculate size difference
         let old_metadata_size = (data_chunk.start_position - metadata_insert_pos - 8) as usize; // -8 for data chunk header
         let new_metadata_size = new_metadata.len();
@@ -682,12 +699,17 @@ impl Codec for WavCodec {
 
         if size_diff == 0 && new_metadata_size <= old_metadata_size {
             // Perfect fit or smaller - can do true in-place update
-            self.update_metadata_in_place(&mut file, metadata_insert_pos, &new_metadata, data_chunk)?;
+            self.update_metadata_in_place(
+                &mut file,
+                metadata_insert_pos,
+                &new_metadata,
+                data_chunk,
+            )?;
         } else {
             // Size changed - use fixed append-at-end strategy (keeps data intact!)
             self.update_metadata_append_strategy(&mut file, &chunks, &new_metadata)?;
         }
-        
+
         Ok(())
     }
 }
@@ -703,14 +725,33 @@ struct WavChunk {
 impl WavCodec {
     fn is_valid_chunk_id(&self, chunk_id: &[u8]) -> bool {
         // Check if this is a known metadata chunk type
-        matches!(chunk_id, 
-            b"fmt " | b"bext" | b"iXML" | b"LIST" | b"id3 " | b"ID3 " |
-            b"JUNK" | b"PAD " | b"fact" | b"cue " | b"plst" | b"labl" |
-            b"note" | b"ltxt" | b"smpl" | b"inst"
+        matches!(
+            chunk_id,
+            b"fmt "
+                | b"bext"
+                | b"iXML"
+                | b"LIST"
+                | b"id3 "
+                | b"ID3 "
+                | b"JUNK"
+                | b"PAD "
+                | b"fact"
+                | b"cue "
+                | b"plst"
+                | b"labl"
+                | b"note"
+                | b"ltxt"
+                | b"smpl"
+                | b"inst"
         )
     }
-    
-    fn parse_metadata_chunk(&self, chunk_id: &[u8], chunk_data: &[u8], metadata: &mut Metadata) -> R<()> {
+
+    fn parse_metadata_chunk(
+        &self,
+        chunk_id: &[u8],
+        chunk_data: &[u8],
+        metadata: &mut Metadata,
+    ) -> R<()> {
         match chunk_id {
             b"fmt " => {
                 if chunk_data.len() >= 16 {
@@ -747,11 +788,11 @@ impl WavCodec {
         use std::io::{Read, Seek, SeekFrom};
 
         file.seek(SeekFrom::Start(0))?;
-        
+
         // Read and validate RIFF header
         let mut header = [0u8; 12];
         file.read_exact(&mut header)?;
-        
+
         if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
             return Err(anyhow!("Invalid WAV file"));
         }
@@ -765,22 +806,29 @@ impl WavCodec {
 
         loop {
             file.seek(SeekFrom::Start(pos))?;
-            
+
             let mut chunk_header = [0u8; 8];
             match file.read_exact(&mut chunk_header) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(_) => break, // End of file
             }
 
             let mut chunk_id = [0u8; 4];
             chunk_id.copy_from_slice(&chunk_header[0..4]);
             let chunk_size = u32::from_le_bytes([
-                chunk_header[4], chunk_header[5], chunk_header[6], chunk_header[7]
+                chunk_header[4],
+                chunk_header[5],
+                chunk_header[6],
+                chunk_header[7],
             ]);
 
             let data_start = pos + 8;
             let data_end = data_start + chunk_size as u64;
-            let padded_end = if chunk_size % 2 == 1 { data_end + 1 } else { data_end };
+            let padded_end = if chunk_size % 2 == 1 {
+                data_end + 1
+            } else {
+                data_end
+            };
 
             chunks.push(WavChunk {
                 id: chunk_id,
@@ -806,11 +854,11 @@ impl WavCodec {
     }
 
     fn update_metadata_in_place(
-        &self, 
-        file: &mut std::fs::File, 
-        metadata_pos: u64, 
+        &self,
+        file: &mut std::fs::File,
+        metadata_pos: u64,
         new_metadata: &[u8],
-        data_chunk: &WavChunk
+        data_chunk: &WavChunk,
     ) -> R<()> {
         use std::io::{Seek, SeekFrom, Write};
 
@@ -821,7 +869,7 @@ impl WavCodec {
         // Clear any remaining old metadata with zeros
         let old_metadata_end = data_chunk.start_position - 8; // -8 for data chunk header
         let new_metadata_end = metadata_pos + new_metadata.len() as u64;
-        
+
         if old_metadata_end > new_metadata_end {
             let clear_size = old_metadata_end - new_metadata_end;
             let zeros = vec![0u8; clear_size as usize];
@@ -842,17 +890,29 @@ impl WavCodec {
         new_metadata: &[u8],
         size_diff: i64,
     ) -> R<()> {
-
-        let data_chunk = chunks.iter()
+        let data_chunk = chunks
+            .iter()
             .find(|chunk| &chunk.id == b"data")
             .ok_or_else(|| anyhow!("No data chunk found"))?;
 
         if size_diff > 0 {
             // File growing - need to make space by moving data chunk backward
-            self.move_data_chunk_for_growth(file, data_chunk, metadata_pos, new_metadata, size_diff as u64)?;
+            self.move_data_chunk_for_growth(
+                file,
+                data_chunk,
+                metadata_pos,
+                new_metadata,
+                size_diff as u64,
+            )?;
         } else {
             // File shrinking - write metadata first, then move data chunk forward
-            self.move_data_chunk_for_shrink(file, data_chunk, metadata_pos, new_metadata, (-size_diff) as u64)?;
+            self.move_data_chunk_for_shrink(
+                file,
+                data_chunk,
+                metadata_pos,
+                new_metadata,
+                (-size_diff) as u64,
+            )?;
         }
 
         self.update_riff_size(file)?;
@@ -870,22 +930,27 @@ impl WavCodec {
         use std::io::{Read, Seek, SeekFrom, Write};
 
         let data_size = data_chunk.size as u64;
-        
+
         // Move data in chunks to avoid loading entire file into memory
         // Use larger buffers for big files to reduce I/O operations
-        let buffer_size = if data_size > 500 * 1024 * 1024 { // > 500MB
+        let buffer_size = if data_size > 500 * 1024 * 1024 {
+            // > 500MB
             64 * 1024 * 1024 // 64MB buffer for large files
-        } else if data_size > 100 * 1024 * 1024 { // > 100MB
+        } else if data_size > 100 * 1024 * 1024 {
+            // > 100MB
             16 * 1024 * 1024 // 16MB buffer for medium files
         } else {
-            4 * 1024 * 1024  // 4MB buffer for smaller files
+            4 * 1024 * 1024 // 4MB buffer for smaller files
         };
         let old_data_start = data_chunk.start_position;
         let new_data_start = old_data_start + growth;
 
         // Check if we have enough disk space for the operation
         if let Err(e) = file.set_len(new_data_start + data_size) {
-            return Err(anyhow!("Cannot extend file - check disk space and write permissions: {}", e));
+            return Err(anyhow!(
+                "Cannot extend file - check disk space and write permissions: {}",
+                e
+            ));
         }
 
         // Move data from end to beginning to avoid overwriting
@@ -893,16 +958,16 @@ impl WavCodec {
         while remaining > 0 {
             let chunk_size = std::cmp::min(remaining, buffer_size as u64) as usize;
             let offset = remaining - chunk_size as u64;
-            
+
             // Read chunk from original position
             file.seek(SeekFrom::Start(old_data_start + offset))?;
             let mut buffer = vec![0u8; chunk_size];
             file.read_exact(&mut buffer)?;
-            
+
             // Write to new position
             file.seek(SeekFrom::Start(new_data_start + offset))?;
             file.write_all(&buffer)?;
-            
+
             remaining -= chunk_size as u64;
         }
 
@@ -946,27 +1011,29 @@ impl WavCodec {
         file.write_all(&(data_chunk.size).to_le_bytes())?;
 
         // Move data forward in chunks with optimized buffer sizes
-        let buffer_size = if data_size > 500 * 1024 * 1024 { // > 500MB
+        let buffer_size = if data_size > 500 * 1024 * 1024 {
+            // > 500MB
             64 * 1024 * 1024 // 64MB buffer for large files
-        } else if data_size > 100 * 1024 * 1024 { // > 100MB
+        } else if data_size > 100 * 1024 * 1024 {
+            // > 100MB
             16 * 1024 * 1024 // 16MB buffer for medium files
         } else {
-            4 * 1024 * 1024  // 4MB buffer for smaller files
+            4 * 1024 * 1024 // 4MB buffer for smaller files
         };
-        
+
         let mut moved = 0u64;
         while moved < data_size {
             let chunk_size = std::cmp::min(data_size - moved, buffer_size as u64) as usize;
-            
+
             // Read from old position
             file.seek(SeekFrom::Start(old_data_start + moved))?;
             let mut buffer = vec![0u8; chunk_size];
             file.read_exact(&mut buffer)?;
-            
+
             // Write to new position
             file.seek(SeekFrom::Start(new_data_start + moved))?;
             file.write_all(&buffer)?;
-            
+
             moved += chunk_size as u64;
         }
 
@@ -998,8 +1065,9 @@ impl WavCodec {
 
         // Strategy: Keep existing structure intact, append metadata at end
         // Layout: RIFF + fmt + [old metadata space] + data + NEW metadata (at end)
-        
-        let data_chunk = chunks.iter()
+
+        let data_chunk = chunks
+            .iter()
             .find(|chunk| &chunk.id == b"data")
             .ok_or_else(|| anyhow!("No data chunk found"))?;
 
@@ -1010,7 +1078,7 @@ impl WavCodec {
         // Append new metadata chunks at the end
         file.seek(SeekFrom::Start(append_position))?;
         file.write_all(new_metadata)?;
-        
+
         // Update file size and RIFF header
         let new_file_size = append_position + new_metadata.len() as u64;
         file.set_len(new_file_size)?;
@@ -1030,7 +1098,7 @@ impl WavCodec {
             }
 
             let chunk_size = cursor.read_u32::<LittleEndian>()? as usize;
-            
+
             if &chunk_id == b"data" {
                 let data_start = cursor.position() as usize;
                 return Ok((data_start, chunk_size));
@@ -1058,7 +1126,7 @@ impl WavCodec {
             }
 
             let chunk_size = cursor.read_u32::<LittleEndian>()? as usize;
-            
+
             if &chunk_id == b"fmt " {
                 let chunk_end = cursor.position() as usize + chunk_size;
                 let mut result = Vec::new();
@@ -1166,10 +1234,10 @@ impl WavCodec {
         }
 
         // TimeReference (8 bytes)
-        if let Some(time_ref) = metadata.get_field("TimeReference") {
-            if let Ok(time_ref_val) = time_ref.parse::<u64>() {
-                (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
-            }
+        if let Some(time_ref) = metadata.get_field("TimeReference")
+            && let Ok(time_ref_val) = time_ref.parse::<u64>()
+        {
+            (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
         }
 
         Ok(bext_data)
@@ -1410,10 +1478,9 @@ impl WavCodec {
         if let Some(time_ref) = metadata
             .get_field("TimeReference")
             .or_else(|| metadata.get_field("BEXT_BWF_TIME_REFERENCE_LOW"))
+            && let Ok(time_ref_val) = time_ref.parse::<u64>()
         {
-            if let Ok(time_ref_val) = time_ref.parse::<u64>() {
-                (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
-            }
+            (&mut bext_data[338..346]).write_u64::<LittleEndian>(time_ref_val)?;
         }
 
         // Write bext chunk

@@ -26,55 +26,56 @@ impl Codec for FlacCodec {
         // Optimized two-phase metadata extraction for FLAC files
         use std::fs::File;
         use std::io::{Read, Seek, SeekFrom};
-        
+
         let mut file = File::open(file_path)?;
         let file_size = file.metadata()?.len();
-        
+
         // Validate FLAC header first
         let mut header = [0u8; 4];
         file.read_exact(&mut header)?;
         if &header != b"fLaC" {
             return Err(anyhow!("Not a valid FLAC file"));
         }
-        
+
         // PHASE 1: Read first 2MB (or until last metadata block) for standard metadata
         let mut pos = 4u64;
         let first_phase_limit = std::cmp::min(file_size, 2 * 1024 * 1024); // 2MB limit for FLAC metadata
         let mut found_audio_frames = false;
         let mut audio_start = 0u64;
-        
+
         while pos < first_phase_limit {
             file.seek(SeekFrom::Start(pos))?;
-            
+
             let mut block_header = [0u8; 4];
             if file.read_exact(&mut block_header).is_err() {
                 break;
             }
-            
+
             let is_last = (block_header[0] & 0x80) != 0;
             let block_type = block_header[0] & 0x7F;
-            let block_size = ((block_header[1] as u32) << 16) | 
-                           ((block_header[2] as u32) << 8) | 
-                           (block_header[3] as u32);
-            
+            let block_size = ((block_header[1] as u32) << 16)
+                | ((block_header[2] as u32) << 8)
+                | (block_header[3] as u32);
+
             pos += 4 + block_size as u64;
-            
+
             if is_last {
                 found_audio_frames = true;
                 audio_start = pos;
                 break; // Stop at last metadata block for phase 1
             }
         }
-        
+
         // PHASE 2: Read last 1MB if file is large enough and we found audio frames
-        let metadata_end_pos = if found_audio_frames && file_size > 4 * 1024 * 1024 { // Only for files > 4MB
+        let metadata_end_pos = if found_audio_frames && file_size > 4 * 1024 * 1024 {
+            // Only for files > 4MB
             let last_mb_start = std::cmp::max(audio_start + 1024 * 1024, file_size - 1024 * 1024);
-            
+
             if last_mb_start < file_size {
                 // Check if there are any Application blocks or other metadata at the end
                 pos = last_mb_start;
                 file.seek(SeekFrom::Start(pos))?;
-                
+
                 // For FLAC, metadata at the end would be in Application blocks
                 // but this is extremely rare, so we'll just note the position
                 file_size
@@ -84,16 +85,17 @@ impl Codec for FlacCodec {
         } else {
             pos
         };
-        
+
         // Use truncated buffer approach - only read metadata portion
-        let metadata_limit = std::cmp::min(file_size, std::cmp::max(metadata_end_pos, 2 * 1024 * 1024));
+        let metadata_limit =
+            std::cmp::min(file_size, std::cmp::max(metadata_end_pos, 2 * 1024 * 1024));
         let truncated_data = {
             file.seek(SeekFrom::Start(0))?;
             let mut buffer = vec![0u8; metadata_limit as usize];
             file.read_exact(&mut buffer)?;
             buffer
         };
-        
+
         // Parse metadata using metaflac with the truncated buffer
         self.parse_metadata(&truncated_data)
     }
@@ -186,38 +188,32 @@ impl Codec for FlacCodec {
                         let mut comment_cursor = Cursor::new(&comment_data);
 
                         // Read vendor string length and skip it
-                        if let Ok(vendor_length) = comment_cursor.read_u32::<LittleEndian>() {
-                            if vendor_length as usize <= comment_data.len() - 4 {
-                                comment_cursor.seek(SeekFrom::Current(vendor_length as i64))?;
+                        if let Ok(vendor_length) = comment_cursor.read_u32::<LittleEndian>()
+                            && vendor_length as usize <= comment_data.len() - 4
+                        {
+                            comment_cursor.seek(SeekFrom::Current(vendor_length as i64))?;
 
-                                // Read number of comments
-                                if let Ok(comment_count) = comment_cursor.read_u32::<LittleEndian>()
-                                {
-                                    for _ in 0..comment_count {
-                                        if let Ok(comment_length) =
-                                            comment_cursor.read_u32::<LittleEndian>()
-                                        {
-                                            if comment_length > 0 && comment_length as usize <= 1024
-                                            {
-                                                // Reasonable limit
-                                                let mut comment =
-                                                    vec![0u8; comment_length as usize];
-                                                if comment_cursor.read_exact(&mut comment).is_ok() {
-                                                    let comment_str =
-                                                        String::from_utf8_lossy(&comment);
-                                                    if let Some(eq_pos) = comment_str.find('=') {
-                                                        let key =
-                                                            comment_str[..eq_pos].to_lowercase();
-                                                        let value = &comment_str[eq_pos + 1..];
+                            // Read number of comments
+                            if let Ok(comment_count) = comment_cursor.read_u32::<LittleEndian>() {
+                                for _ in 0..comment_count {
+                                    if let Ok(comment_length) =
+                                        comment_cursor.read_u32::<LittleEndian>()
+                                        && comment_length > 0
+                                        && comment_length as usize <= 1024
+                                    {
+                                        // Reasonable limit
+                                        let mut comment = vec![0u8; comment_length as usize];
+                                        if comment_cursor.read_exact(&mut comment).is_ok() {
+                                            let comment_str = String::from_utf8_lossy(&comment);
+                                            if let Some(eq_pos) = comment_str.find('=') {
+                                                let key = comment_str[..eq_pos].to_lowercase();
+                                                let value = &comment_str[eq_pos + 1..];
 
-                                                        if (key == "description"
-                                                            || key == "comment")
-                                                            && !value.trim().is_empty()
-                                                        {
-                                                            description = value.trim().to_string();
-                                                            break;
-                                                        }
-                                                    }
+                                                if (key == "description" || key == "comment")
+                                                    && !value.trim().is_empty()
+                                                {
+                                                    description = value.trim().to_string();
+                                                    break;
                                                 }
                                             }
                                         }
@@ -489,11 +485,11 @@ impl Codec for FlacCodec {
 
             // Parse Application blocks for iXML
             for block in tag.blocks() {
-                if let Block::Application(app_block) = block {
-                    if &app_block.id == b"iXML" {
-                        let ixml_str = String::from_utf8_lossy(&app_block.data);
-                        metadata.parse_ixml(&ixml_str)?;
-                    }
+                if let Block::Application(app_block) = block
+                    && &app_block.id == b"iXML"
+                {
+                    let ixml_str = String::from_utf8_lossy(&app_block.data);
+                    metadata.parse_ixml(&ixml_str)?;
                 }
             }
         }
@@ -574,7 +570,7 @@ impl Codec for FlacCodec {
             .write(true)
             .open(file_path)
             .map_err(|e| anyhow!("No write permission for file '{}': {}", file_path, e))?;
-        
+
         // Use metaflac to safely write metadata blocks
         let mut dest_tag = Tag::read_from_path(file_path).unwrap_or_else(|_| Tag::new());
 
@@ -598,7 +594,7 @@ impl Codec for FlacCodec {
                 // This is likely an iXML field, skip it here as it will be handled in iXML creation
                 continue;
             };
-            
+
             vorbis_comment
                 .comments
                 .entry(vorbis_key)

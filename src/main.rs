@@ -4,7 +4,7 @@ use ffcodex_lib::*;
 fn main() -> R<()> {
     // Use the directly exported get_version function
     let version = bindings::chromaprint_bindings::get_version();
-    let start_time = std::time::Instant::now();
+    // let start_time = std::time::Instant::now();
     println!("Chromaprint version: {}", version);
     // strip_soundminer_metadata(file_path)
 

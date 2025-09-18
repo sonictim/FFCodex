@@ -348,11 +348,11 @@ impl Metadata {
             let frame_data = &data[offset + 10..offset + 10 + frame_size];
 
             // Parse common text frames
-            if let Some(key) = get_id3_frame_name(&frame_id) {
-                if let Some(text) = parse_id3_text_frame(frame_data) {
-                    let prefixed_key = format!("TAG_{}", key);
-                    self.set_field(&prefixed_key, &text)?;
-                }
+            if let Some(key) = get_id3_frame_name(&frame_id)
+                && let Some(text) = parse_id3_text_frame(frame_data)
+            {
+                let prefixed_key = format!("TAG_{}", key);
+                self.set_field(&prefixed_key, &text)?;
             }
 
             offset += 10 + frame_size;
@@ -373,32 +373,32 @@ impl Metadata {
         }
 
         // Originator: 32 bytes, null-terminated string
-        if data.len() >= 288 {
-            if let Some(originator) = clean_text_field(&data[256..288]) {
-                self.set_field("Originator", &originator)?;
-                self.set_field("USER_DESIGNER", &originator)?;
-            }
+        if data.len() >= 288
+            && let Some(originator) = clean_text_field(&data[256..288])
+        {
+            self.set_field("Originator", &originator)?;
+            self.set_field("USER_DESIGNER", &originator)?;
         }
 
         // OriginatorReference: 32 bytes, null-terminated string
-        if data.len() >= 320 {
-            if let Some(orig_ref) = clean_text_field(&data[288..320]) {
-                self.set_field("OriginatorReference", &orig_ref)?;
-            }
+        if data.len() >= 320
+            && let Some(orig_ref) = clean_text_field(&data[288..320])
+        {
+            self.set_field("OriginatorReference", &orig_ref)?;
         }
 
         // OriginationDate: 10 bytes, format YYYY-MM-DD
-        if data.len() >= 330 {
-            if let Some(date) = clean_text_field(&data[320..330]) {
-                self.set_field("OriginationDate", &date)?;
-            }
+        if data.len() >= 330
+            && let Some(date) = clean_text_field(&data[320..330])
+        {
+            self.set_field("OriginationDate", &date)?;
         }
 
         // OriginationTime: 8 bytes, format HH:MM:SS
-        if data.len() >= 338 {
-            if let Some(time) = clean_text_field(&data[330..338]) {
-                self.set_field("OriginationTime", &time)?;
-            }
+        if data.len() >= 338
+            && let Some(time) = clean_text_field(&data[330..338])
+        {
+            self.set_field("OriginationTime", &time)?;
         }
 
         // TimeReference: 8 bytes, 64-bit integer (little-endian)
@@ -411,10 +411,10 @@ impl Metadata {
         }
 
         // CodingHistory: remaining bytes, null-terminated string
-        if data.len() > 602 {
-            if let Some(coding_history) = clean_text_field(&data[602..]) {
-                self.set_field("CodingHistory", &coding_history)?;
-            }
+        if data.len() > 602
+            && let Some(coding_history) = clean_text_field(&data[602..])
+        {
+            self.set_field("CodingHistory", &coding_history)?;
         }
 
         Ok(())
