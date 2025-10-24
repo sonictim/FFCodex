@@ -1,11 +1,9 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
 pub fn build() {
     // Output directory for our compiled library
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-
     // Try to use local vendor directory first, then fall back to downloading
     let local_wavpack_dir = PathBuf::from("vendor/wavpack-src");
     let wavpack_dir = if local_wavpack_dir.exists()
@@ -27,9 +25,7 @@ pub fn build() {
                 ])
                 .status()
                 .expect("Failed to clone WavPack repository. Make sure git is installed and you have internet access.");
-
             assert!(status.success(), "Failed to clone WavPack repository");
-
             // Verify the clone was successful by checking for key files
             let header_file = downloaded_dir.join("include/wavpack.h");
             if !header_file.exists() {
@@ -38,13 +34,10 @@ pub fn build() {
         }
         downloaded_dir
     };
-
     // Compile WavPack source
     let mut config = cc::Build::new();
-
     // Add include directories
     config.include(wavpack_dir.join("include"));
-
     // Add source files - adjust these based on what you need from WavPack
     let source_files = [
         "src/common_utils.c",
@@ -69,33 +62,35 @@ pub fn build() {
         "src/tags.c",      // Tag/metadata functions
         "src/tag_utils.c", // Tag utility functions
     ];
-
     // Add source files to the build
     for file in &source_files {
         config.file(wavpack_dir.join(file));
     }
-
     // Define compile flags
     config.define("PACKAGE_VERSION", "\"5.6.0\""); // Adjust version as needed
     config.define("_FILE_OFFSET_BITS", "64");
 
-    // Suppress C compiler warnings
-    config.flag("-w"); // Suppress all warnings
-    config.flag("-Wno-sign-compare"); // Suppress sign comparison warnings specifically
+    // Suppress C compiler warnings - use appropriate flags for the compiler
+    if config.get_compiler().is_like_msvc() {
+        // MSVC flags (Windows)
+        config.flag("/w"); // Suppress all warnings
+    // Note: MSVC doesn't have an equivalent to -Wno-sign-compare
+    // The /w flag already suppresses all warnings including sign comparison
+    } else {
+        // GCC/Clang flags (Unix-like systems)
+        config.flag("-w"); // Suppress all warnings
+        config.flag("-Wno-sign-compare"); // Suppress sign comparison warnings specifically
+    }
 
     // Compile the library
     config.compile("wavpack");
-
     // Tell cargo to link to the compiled library
     println!("cargo:rustc-link-lib=static=wavpack");
-
     // Tell cargo to invalidate the built crate whenever the build script changes
     println!("cargo:rerun-if-changed=build.rs");
-
     // Generate Rust bindings if needed
     generate_bindings(&wavpack_dir);
 }
-
 fn generate_bindings(wavpack_dir: &Path) {
     // Generate bindings for the WavPack C API
     let bindings = bindgen::Builder::default()
@@ -103,7 +98,6 @@ fn generate_bindings(wavpack_dir: &Path) {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("Unable to generate bindings");
-
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     bindings
         .write_to_file(out_path.join("bindings.rs"))
