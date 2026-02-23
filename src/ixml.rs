@@ -69,13 +69,11 @@ impl Metadata {
                 }
             }
 
-            if key.is_some() && val.is_some() {
+            if let (Some(k), Some(v)) = (key.take(), val.take()) {
                 self.set_field(
-                    &format!("{}_{}", block.as_str(), key.unwrap()),
-                    &val.unwrap(),
+                    &format!("{}_{}", block.as_str(), k),
+                    &v,
                 )?;
-                key = None;
-                val = None;
             }
         }
 

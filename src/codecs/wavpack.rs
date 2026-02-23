@@ -321,7 +321,7 @@ impl WavpackEncoder {
         }
 
         // Set file information
-        let extension = CString::new("wv").unwrap();
+        let extension = CString::new("wv").map_err(|e| anyhow!("Failed to create CString: {}", e))?;
         unsafe {
             WavpackSetFileInformation(
                 self.context,

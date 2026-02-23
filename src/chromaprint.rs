@@ -21,18 +21,21 @@ impl Codex {
         }
 
         // Determine target sample rate and resample if needed
-        let target_sample_rate = if self.buffer.as_ref().unwrap().sample_rate == 44100 {
-            44100
-        } else {
-            48000
+        let target_sample_rate = match self.buffer.as_ref() {
+            Some(buf) if buf.sample_rate == 44100 => 44100,
+            _ => 48000,
         };
 
-        if self.buffer.as_ref().unwrap().sample_rate != target_sample_rate {
-            self.resample(target_sample_rate)?;
+        if let Some(buf) = self.buffer.as_ref() {
+            if buf.sample_rate != target_sample_rate {
+                self.resample(target_sample_rate)?;
+            }
         }
 
         // Now we can work with the final buffer
-        let buffer = self.buffer.as_ref().unwrap();
+        let buffer = self.buffer.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Audio buffer lost during resampling")
+        })?;
 
         const MIN_SAMPLES_PER_CHANNEL: usize = 144000; // 3 seconds at 48kHz per channel
 

@@ -50,16 +50,20 @@ macro_rules! dprintln {
     };
 }
 pub fn clean_multi_mono(path: &str) -> R<()> {
-    let temp_path = std::env::temp_dir().join(format!(
-        "ffcodex_{}",
-        PathBuf::from(path).file_name().unwrap().to_string_lossy()
-    ));
+    let filename = PathBuf::from(path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let temp_path = std::env::temp_dir().join(format!("ffcodex_{}", filename));
 
     // Process in chunks to minimize memory usage
     {
         let mut codex = Codex::open(path)?;
         codex.convert_dual_mono()?;
-        codex.export(temp_path.to_str().unwrap())?;
+        let temp_str = temp_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Temp path contains invalid UTF-8"))?;
+        codex.export(temp_str)?;
     } // All memory freed here
 
     // Replace original - use same robust logic as export()
@@ -185,7 +189,11 @@ impl Codex {
                 self.path.display()
             )
         })?;
-        self.metadata = Some(codec.extract_metadata_from_file(self.path.to_str().unwrap())?);
+        let path_str = self
+            .path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8: {}", self.path.display()))?;
+        self.metadata = Some(codec.extract_metadata_from_file(path_str)?);
         Ok(self)
     }
 
@@ -202,7 +210,11 @@ impl Codex {
             ));
         };
 
-        codec.embed_metadata_to_file(self.path.to_str().unwrap(), metadata)
+        let path_str = self
+            .path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8: {}", self.path.display()))?;
+        codec.embed_metadata_to_file(path_str, metadata)
     }
     pub fn embed_metadata_to_different_file(&self, file_path: &str) -> R<()> {
         let metadata = match &self.metadata {
@@ -297,11 +309,8 @@ impl Codex {
                 if extension == "wv" && self.metadata.is_some() {
                     // WavPack optimization: encode with metadata in one pass
                     let final_metadata =
-                        if let Some(buffer) = &self.buffer {
-                            Some(self.update_metadata_from_buffer(
-                                self.metadata.as_ref().unwrap(),
-                                buffer,
-                            ))
+                        if let (Some(buffer), Some(metadata)) = (&self.buffer, &self.metadata) {
+                            Some(self.update_metadata_from_buffer(metadata, buffer))
                         } else {
                             self.metadata.clone()
                         };
@@ -390,7 +399,10 @@ impl Codex {
                 self.path.display()
             )
         })?;
-        codec.get_file_info(self.path.to_str().unwrap())
+        let path_str = self.path.to_str().ok_or_else(|| {
+            anyhow::anyhow!("Path contains invalid UTF-8: {}", self.path.display())
+        })?;
+        codec.get_file_info(path_str)
     }
 
     fn update_metadata_from_buffer(&self, metadata: &Metadata, buffer: &AudioBuffer) -> Metadata {

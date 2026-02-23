@@ -1,10 +1,11 @@
 use crate::*;
 use cpal::traits::HostTrait;
 impl Codex {
-    pub fn playback(&self) {
+    pub fn playback(&self) -> R<()> {
         let host = cpal::default_host();
-        let device = host
+        let _device = host
             .default_output_device()
-            .expect("no output device available");
+            .ok_or_else(|| anyhow::anyhow!("no output device available"))?;
+        Ok(())
     }
 }
