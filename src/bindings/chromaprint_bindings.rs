@@ -33,19 +33,13 @@ pub struct Chromaprint {
     ctx: *mut ChromaprintContext,
 }
 
-impl Default for Chromaprint {
-    fn default() -> Self {
-        Self::new(CHROMAPRINT_ALGORITHM_DEFAULT)
-    }
-}
-
 impl Chromaprint {
-    pub fn new(algorithm: c_int) -> Self {
+    pub fn new(algorithm: c_int) -> Result<Self, &'static str> {
         let ctx = unsafe { chromaprint_new(algorithm) };
         if ctx.is_null() {
-            panic!("Failed to create Chromaprint context");
+            return Err("Failed to create Chromaprint context");
         }
-        Chromaprint { ctx }
+        Ok(Chromaprint { ctx })
     }
 
     pub fn start(&self, sample_rate: i32, num_channels: i32) -> bool {

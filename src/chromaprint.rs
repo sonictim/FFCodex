@@ -58,7 +58,8 @@ impl Codex {
         };
 
         // Try Chromaprint fingerprinting
-        let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT);
+        let c = Chromaprint::new(CHROMAPRINT_ALGORITHM_DEFAULT)
+            .map_err(|e| anyhow::anyhow!(e))?;
         if c.start(target_sample_rate as i32, num_channels) {
             c.feed(&samples);
             c.finish();
