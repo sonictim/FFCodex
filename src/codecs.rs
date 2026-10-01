@@ -185,12 +185,12 @@ impl Metadata {
         let keys = get_metadata_keys(key);
         match keys.is_empty() {
             true => {
-                dprintln!("Set field: {} = {}", key, &trimmed_value);
+                log::debug!("Set field: {} = {}", key, &trimmed_value);
                 self.map.insert(key.to_string(), trimmed_value);
             }
             false => {
                 for key in keys {
-                    dprintln!("Set field: {} = {}", key, &trimmed_value);
+                    log::debug!("Set field: {} = {}", key, &trimmed_value);
                     self.map.insert(key.to_string(), trimmed_value.clone());
                 }
             }

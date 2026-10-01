@@ -411,16 +411,16 @@ impl WavpackEncoder {
         // CRITICAL: Write metadata tags AFTER all audio data has been encoded
         // This ensures the WavPack header comes first, then audio data, then metadata
         if metadata.is_some() {
-            dprintln!("WavPack encode: Writing metadata tags to output stream...");
+            log::debug!("WavPack encode: Writing metadata tags to output stream...");
             let write_result = unsafe { WavpackWriteTag(self.context) };
             if write_result == 0 {
-                dprintln!("WavPack encode: WARNING - WavpackWriteTag() failed");
+                log::warn!("WavPack encode: WavpackWriteTag() failed");
             } else {
-                dprintln!("WavPack encode: WavpackWriteTag() successful");
+                log::debug!("WavPack encode: WavpackWriteTag() successful");
             }
         }
 
-        dprintln!(
+        log::debug!(
             "WavPack encode: After flush, output buffer has {} bytes",
             self.output_buffer.len()
         );
@@ -428,7 +428,7 @@ impl WavpackEncoder {
         // Verify metadata is still in the context after encoding
         let final_text_tags = unsafe { WavpackGetNumTagItems(self.context) };
         let final_binary_tags = unsafe { WavpackGetNumBinaryTagItems(self.context) };
-        dprintln!(
+        log::debug!(
             "WavPack encode: Final verification - context has {} text tags and {} binary tags",
             final_text_tags,
             final_binary_tags
@@ -583,7 +583,7 @@ impl Codec for WvCodec {
 
         // Extract text tags
         let num_tags = unsafe { WavpackGetNumTagItems(decoder.context) };
-        dprintln!("WavPack parse_metadata: Found {} text tags", num_tags);
+        log::debug!("WavPack parse_metadata: Found {} text tags", num_tags);
 
         for i in 0..num_tags {
             let mut item_buffer = vec![0u8; 256];
@@ -610,7 +610,7 @@ impl Codec for WvCodec {
 
                 if value_result > 0 {
                     let value = String::from_utf8_lossy(&value_buffer[..value_result as usize]);
-                    dprintln!(
+                    log::debug!(
                         "WavPack parse_metadata: Found tag '{}' = '{}'",
                         item_name,
                         value
@@ -630,7 +630,7 @@ impl Codec for WvCodec {
 
         // Extract binary tags
         let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(decoder.context) };
-        dprintln!(
+        log::debug!(
             "WavPack parse_metadata: Found {} binary tags",
             num_binary_tags
         );
@@ -669,7 +669,7 @@ impl Codec for WvCodec {
                     };
 
                     if binary_result > 0 {
-                        dprintln!(
+                        log::debug!(
                             "WavPack parse_metadata: Found binary tag '{}' ({} bytes)",
                             item_name,
                             binary_data.len()
@@ -723,7 +723,7 @@ impl Codec for WvCodec {
             };
 
             if !wrapper_data.is_empty() {
-                dprintln!(
+                log::debug!(
                     "WavPack parse_metadata: Found wrapper data ({} bytes)",
                     wrapper_data.len()
                 );
@@ -767,7 +767,7 @@ impl Codec for WvCodec {
         // Verify metadata was added to context
         let text_tags = unsafe { WavpackGetNumTagItems(encoder.context) };
         let binary_tags = unsafe { WavpackGetNumBinaryTagItems(encoder.context) };
-        dprintln!(
+        log::debug!(
             "WavPack embed_metadata_to_file: After adding metadata - context has {} text tags and {} binary tags",
             text_tags,
             binary_tags
@@ -836,7 +836,7 @@ impl WvCodec {
 
         // Extract text tags
         let num_tags = unsafe { WavpackGetNumTagItems(decoder.context) };
-        dprintln!("WavPack parse_metadata: Found {} text tags", num_tags);
+        log::debug!("WavPack parse_metadata: Found {} text tags", num_tags);
 
         for i in 0..num_tags {
             let mut item_buffer = vec![0u8; 256];
@@ -875,7 +875,7 @@ impl WvCodec {
                         .unwrap_or(value_buffer.len());
                     let value = String::from_utf8_lossy(&value_buffer[..value_end]).to_string();
                     if !item_name.is_empty() && !value.is_empty() {
-                        dprintln!(
+                        log::debug!(
                             "WavPack parse_metadata: Found tag '{}' = '{}'",
                             item_name,
                             value
@@ -896,7 +896,7 @@ impl WvCodec {
 
         // Extract binary tags (like album art)
         let num_binary_tags = unsafe { WavpackGetNumBinaryTagItems(decoder.context) };
-        dprintln!(
+        log::debug!(
             "WavPack parse_metadata: Found {} binary tags",
             num_binary_tags
         );
@@ -959,7 +959,7 @@ impl WvCodec {
                 let wrapper_slice =
                     unsafe { std::slice::from_raw_parts(wrapper_data, wrapper_bytes as usize) };
 
-                dprintln!(
+                log::debug!(
                     "WavPack parse_metadata: Found wrapper data ({} bytes), parsing embedded metadata...",
                     wrapper_bytes
                 );
@@ -974,8 +974,8 @@ impl WvCodec {
 
                 // Parse the wrapper data as the original format's metadata
                 if let Err(e) = self.parse_wrapper_metadata(&mut metadata, wrapper_slice) {
-                    dprintln!(
-                        "WavPack parse_metadata: Warning - failed to parse wrapper metadata: {}",
+                    log::warn!(
+                        "WavPack parse_metadata: failed to parse wrapper metadata: {}",
                         e
                     );
                 }
@@ -1021,7 +1021,7 @@ impl WvCodec {
         // Verify metadata was added to context
         let text_tags = unsafe { WavpackGetNumTagItems(encoder.context) };
         let binary_tags = unsafe { WavpackGetNumBinaryTagItems(encoder.context) };
-        dprintln!(
+        log::debug!(
             "WavPack embed_metadata_to_file: After adding metadata - context has {} text tags and {} binary tags",
             text_tags,
             binary_tags
@@ -1051,7 +1051,7 @@ impl WvCodec {
             && &wrapper_data[0..4] == b"RIFF"
             && &wrapper_data[8..12] == b"WAVE"
         {
-            dprintln!("WavPack parse_wrapper_metadata: Found WAV wrapper data");
+            log::debug!("WavPack parse_wrapper_metadata: Found WAV wrapper data");
             return self.parse_wav_wrapper_chunks(metadata, wrapper_data);
         }
 
@@ -1060,12 +1060,12 @@ impl WvCodec {
             && &wrapper_data[0..4] == b"FORM"
             && &wrapper_data[8..12] == b"AIFF"
         {
-            dprintln!("WavPack parse_wrapper_metadata: Found AIFF wrapper data");
+            log::debug!("WavPack parse_wrapper_metadata: Found AIFF wrapper data");
             return self.parse_aiff_wrapper_chunks(metadata, wrapper_data);
         }
 
         // Try to parse as generic chunks
-        dprintln!("WavPack parse_wrapper_metadata: Parsing as generic chunk data");
+        log::debug!("WavPack parse_wrapper_metadata: Parsing as generic chunk data");
         self.parse_generic_wrapper_chunks(metadata, wrapper_data)
     }
 
@@ -1088,21 +1088,21 @@ impl WvCodec {
 
             match chunk_id {
                 b"bext" => {
-                    dprintln!("WavPack wrapper: Found BWF bext chunk");
+                    log::debug!("WavPack wrapper: Found BWF bext chunk");
                     metadata.parse_bext(chunk_data)?;
                 }
                 b"iXML" => {
-                    dprintln!("WavPack wrapper: Found iXML chunk");
+                    log::debug!("WavPack wrapper: Found iXML chunk");
                     let xml_str = String::from_utf8_lossy(chunk_data);
                     metadata.parse_ixml(&xml_str)?;
                 }
                 b"ID3 " | b"id3 " => {
-                    dprintln!("WavPack wrapper: Found ID3 chunk");
+                    log::debug!("WavPack wrapper: Found ID3 chunk");
                     metadata.parse_id3(chunk_data)?;
                 }
                 b"LIST" => {
                     if chunk_size >= 4 && &chunk_data[0..4] == b"INFO" {
-                        dprintln!("WavPack wrapper: Found LIST INFO chunk");
+                        log::debug!("WavPack wrapper: Found LIST INFO chunk");
                         self.parse_list_info_chunk(metadata, &chunk_data[4..])?;
                     }
                 }
@@ -1110,7 +1110,7 @@ impl WvCodec {
                     // Store unknown chunks for debugging
                     let chunk_name = String::from_utf8_lossy(chunk_id);
                     if chunk_name.chars().all(|c| c.is_ascii_graphic()) {
-                        dprintln!(
+                        log::debug!(
                             "WavPack wrapper: Found chunk '{}' ({} bytes)",
                             chunk_name,
                             chunk_size
@@ -1147,18 +1147,18 @@ impl WvCodec {
 
             match chunk_id {
                 b"iXML" => {
-                    dprintln!("WavPack wrapper: Found AIFF iXML chunk");
+                    log::debug!("WavPack wrapper: Found AIFF iXML chunk");
                     let xml_str = String::from_utf8_lossy(chunk_data);
                     metadata.parse_ixml(&xml_str)?;
                 }
                 b"ID3 " | b"id3 " => {
-                    dprintln!("WavPack wrapper: Found AIFF ID3 chunk");
+                    log::debug!("WavPack wrapper: Found AIFF ID3 chunk");
                     metadata.parse_id3(chunk_data)?;
                 }
                 _ => {
                     let chunk_name = String::from_utf8_lossy(chunk_id);
                     if chunk_name.chars().all(|c| c.is_ascii_graphic()) {
-                        dprintln!(
+                        log::debug!(
                             "WavPack wrapper: Found AIFF chunk '{}' ({} bytes)",
                             chunk_name,
                             chunk_size
@@ -1186,7 +1186,7 @@ impl WvCodec {
             && let Some(end) = data_str.find("</BWFXML>")
         {
             let ixml_content = &data_str[start..end + 9];
-            dprintln!("WavPack wrapper: Found embedded iXML content");
+            log::debug!("WavPack wrapper: Found embedded iXML content");
             metadata.parse_ixml(ixml_content)?;
         }
 
@@ -1271,7 +1271,7 @@ impl WvCodec {
             metadata.set_field("WAVPACK_DECODE_ERRORS", &num_errors.to_string())?;
         }
 
-        dprintln!(
+        log::debug!(
             "WavPack technical metadata: mode={:#x}, version={}, ratio={:.3}, bitrate={}",
             mode,
             version,
@@ -1378,7 +1378,7 @@ impl WvCodec {
         let riff_size = (total_size + 4) as u32; // +4 for the size field itself
         wrapper[4..8].copy_from_slice(&riff_size.to_le_bytes());
 
-        dprintln!("Generated WAV wrapper: {} bytes", wrapper.len());
+        log::debug!("Generated WAV wrapper: {} bytes", wrapper.len());
         Ok(wrapper)
     }
 
@@ -1390,7 +1390,7 @@ impl WvCodec {
             return Ok(Vec::new());
         }
 
-        dprintln!(
+        log::debug!(
             "Generated FLAC wrapper: iXML only ({} bytes)",
             ixml_content.len()
         );
@@ -1427,7 +1427,7 @@ impl WvCodec {
         let form_size = (total_size + 4) as u32;
         wrapper[4..8].copy_from_slice(&form_size.to_be_bytes());
 
-        dprintln!("Generated AIFF wrapper: {} bytes", wrapper.len());
+        log::debug!("Generated AIFF wrapper: {} bytes", wrapper.len());
         Ok(wrapper)
     }
 
@@ -1435,7 +1435,7 @@ impl WvCodec {
     fn generate_generic_wrapper(&self, metadata: &Metadata) -> R<Vec<u8>> {
         // For unknown formats, just create iXML content
         let ixml_content = self.create_ixml(metadata)?;
-        dprintln!("Generated generic wrapper: {} bytes", ixml_content.len());
+        log::debug!("Generated generic wrapper: {} bytes", ixml_content.len());
         Ok(ixml_content.into_bytes())
     }
 
@@ -1466,7 +1466,7 @@ impl WvCodec {
 
         // Add other BEXT fields as needed...
 
-        dprintln!("Created bext chunk: {} bytes", bext.len());
+        log::debug!("Created bext chunk: {} bytes", bext.len());
         Ok(Some(bext))
     }
 
@@ -1499,7 +1499,7 @@ impl WvCodec {
             }
         }
 
-        dprintln!("Created LIST INFO chunk: {} bytes", list_data.len());
+        log::debug!("Created LIST INFO chunk: {} bytes", list_data.len());
         Ok(Some(list_data))
     }
 
@@ -1526,7 +1526,7 @@ impl WvCodec {
             if !text_value.is_empty() {
                 let chunk_name = String::from_utf8_lossy(chunk_id);
                 let field_name = format!("INFO_{}", chunk_name);
-                dprintln!(
+                log::debug!(
                     "WavPack wrapper: Found LIST INFO '{}' = '{}'",
                     chunk_name,
                     text_value
@@ -1567,7 +1567,7 @@ impl WvCodec {
                 }
 
                 if wrapper_data.len() == wrapper_size {
-                    dprintln!(
+                    log::debug!(
                         "WavPack embed: Restoring {} bytes of wrapper data",
                         wrapper_size
                     );
@@ -1582,13 +1582,13 @@ impl WvCodec {
                     };
 
                     if result != 0 {
-                        dprintln!("WavPack embed: Successfully restored wrapper data");
+                        log::debug!("WavPack embed: Successfully restored wrapper data");
                     } else {
-                        dprintln!("WavPack embed: Warning - failed to restore wrapper data");
+                        log::warn!("WavPack embed: failed to restore wrapper data");
                     }
                 } else {
-                    dprintln!(
-                        "WavPack embed: Warning - wrapper data size mismatch: {} vs {}",
+                    log::warn!(
+                        "WavPack embed: wrapper data size mismatch: {} vs {}",
                         wrapper_data.len(),
                         wrapper_size
                     );
@@ -1596,14 +1596,14 @@ impl WvCodec {
             }
         } else {
             // No existing wrapper data - generate it from source format metadata
-            dprintln!(
+            log::debug!(
                 "WavPack embed: No wrapper data found, generating from source format metadata"
             );
 
             if let Ok(generated_wrapper) = self.generate_wrapper_data_from_metadata(metadata)
                 && !generated_wrapper.is_empty()
             {
-                dprintln!(
+                log::debug!(
                     "WavPack embed: Generated {} bytes of wrapper data",
                     generated_wrapper.len()
                 );
@@ -1617,9 +1617,9 @@ impl WvCodec {
                 };
 
                 if result != 0 {
-                    dprintln!("WavPack embed: Successfully added generated wrapper data");
+                    log::debug!("WavPack embed: Successfully added generated wrapper data");
                 } else {
-                    dprintln!("WavPack embed: Warning - failed to add generated wrapper data");
+                    log::warn!("WavPack embed: failed to add generated wrapper data");
                 }
             }
         }
@@ -1651,9 +1651,9 @@ impl WvCodec {
                 let result = unsafe { WavpackStoreMD5Sum(encoder.context, md5_bytes.as_mut_ptr()) };
 
                 if result != 0 {
-                    dprintln!("WavPack embed: Successfully restored MD5 checksum");
+                    log::debug!("WavPack embed: Successfully restored MD5 checksum");
                 } else {
-                    dprintln!("WavPack embed: Warning - failed to restore MD5 checksum");
+                    log::warn!("WavPack embed: failed to restore MD5 checksum");
                 }
             }
         }
@@ -1693,13 +1693,13 @@ impl WvCodec {
             };
 
             if result != 1 {
-                dprintln!(
-                    "Warning: Failed to add text tag '{}' - result: {}",
+                log::warn!(
+                    "Failed to add text tag '{}' - result: {}",
                     wavpack_key,
                     result
                 );
             } else {
-                dprintln!(
+                log::debug!(
                     "Successfully added text tag '{}' with value '{}'",
                     wavpack_key,
                     trimmed_value
@@ -1724,9 +1724,9 @@ impl WvCodec {
             };
 
             if result != 1 {
-                dprintln!("Warning: Failed to add iXML tag - result: {}", result);
+                log::warn!("Failed to add iXML tag - result: {}", result);
             } else {
-                dprintln!("Successfully added iXML tag");
+                log::debug!("Successfully added iXML tag");
             }
         }
 
@@ -1752,13 +1752,13 @@ impl WvCodec {
             };
 
             if result != 1 {
-                dprintln!(
-                    "Warning: Failed to add picture '{}' - result: {}",
+                log::warn!(
+                    "Failed to add picture '{}' - result: {}",
                     image.description(),
                     result
                 );
             } else {
-                dprintln!("Successfully added picture '{}'", image.description());
+                log::debug!("Successfully added picture '{}'", image.description());
             }
         }
 

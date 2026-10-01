@@ -37,17 +37,16 @@ pub mod multimono;
 // const I24_SIGN_EXTENSION_MASK: i32 = !0xFFFFFF;
 // const BYTE_MASK: i32 = 0xFF; // Mask for extracting a single byte
 
-pub fn debug_println(args: std::fmt::Arguments) {
-    if cfg!(debug_assertions) {
-        println!("{}", args);
-    }
-}
+// FFCodex logs through the `log` crate; the host app (e.g. SMDB Companion) decides
+// where it goes. Re-exported so `dprintln!` works without callers depending on `log`.
+#[doc(hidden)]
+pub use log;
 
-// Helper macro to use it like println!
+/// Kept for compatibility; prefer `log::debug!` directly.
 #[macro_export]
 macro_rules! dprintln {
     ($($arg:tt)*) => {
-        $crate::debug_println(format_args!($($arg)*))
+        $crate::log::debug!($($arg)*)
     };
 }
 /// Returns a temp path that is unique per call and lives next to `target`.
@@ -176,8 +175,8 @@ pub fn strip_soundminer_metadata(file_path: &str) -> R<()> {
     // Write cleaned data back to original file
     std::fs::write(file_path, cleaned_data)?;
 
-    println!("Soundminer metadata stripped from: {}", file_path);
-    println!("Backup created at: {}.backup", file_path);
+    log::info!("Soundminer metadata stripped from: {}", file_path);
+    log::info!("Backup created at: {}.backup", file_path);
 
     Ok(())
 }
@@ -613,7 +612,7 @@ fn strip_smed_from_flac(data: &[u8]) -> R<Vec<u8>> {
             });
             output.extend_from_slice(&data[pos + 1..pos + 4 + block_size as usize]);
         } else {
-            println!("Removed SMED APPLICATION block ({} bytes)", block_size);
+            log::debug!("Removed SMED APPLICATION block ({} bytes)", block_size);
         }
 
         cursor.set_position(pos as u64 + 4 + block_size as u64);
@@ -669,7 +668,7 @@ fn strip_smed_from_aiff(data: &[u8]) -> R<Vec<u8>> {
             // Copy non-SMED chunks
             output.extend_from_slice(&data[pos..pos + total_chunk_size]);
         } else {
-            println!("Removed SMED chunk ({} bytes)", chunk_size);
+            log::debug!("Removed SMED chunk ({} bytes)", chunk_size);
             removed_bytes += 8 + chunk_size + (chunk_size % 2); // Include header and padding
         }
 
@@ -720,7 +719,7 @@ fn strip_smed_from_wav(data: &[u8]) -> R<Vec<u8>> {
             // Copy non-SMED chunks
             output.extend_from_slice(&data[pos..pos + total_chunk_size]);
         } else {
-            println!("Removed SMED chunk ({} bytes)", chunk_size);
+            log::debug!("Removed SMED chunk ({} bytes)", chunk_size);
             removed_bytes += 8 + chunk_size + (chunk_size % 2); // Include header and padding
         }
 
@@ -746,6 +745,6 @@ fn strip_smed_from_wavpack(data: &[u8]) -> R<Vec<u8>> {
     // This is more complex to implement directly, so for now return the original data
     // and suggest using WavPack's tag removal functionality
 
-    println!("WavPack SMED removal not yet implemented - use WavPack tools to remove SMED tags");
+    log::warn!("WavPack SMED removal not yet implemented - use WavPack tools to remove SMED tags");
     Ok(data.to_vec())
 }

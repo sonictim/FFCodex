@@ -577,7 +577,7 @@ pub fn resample_optimized(input: &[f32], src_rate: u32, dst_rate: u32) -> Vec<f3
 pub fn benchmark_resample_algorithms(input: &[f32], src_rate: u32, dst_rate: u32) {
     use std::time::Instant;
 
-    dprintln!(
+    log::debug!(
         "Benchmarking resample algorithms for {}Hz -> {}Hz ({} samples)",
         src_rate,
         dst_rate,
@@ -588,23 +588,23 @@ pub fn benchmark_resample_algorithms(input: &[f32], src_rate: u32, dst_rate: u32
     let start = Instant::now();
     let _result1 = resample_windowed_sinc(input, src_rate, dst_rate);
     let time1 = start.elapsed();
-    dprintln!("Original algorithm: {:?}", time1);
+    log::debug!("Original algorithm: {:?}", time1);
 
     // Optimized algorithm
     let start = Instant::now();
     let _result2 = resample_optimized(input, src_rate, dst_rate);
     let time2 = start.elapsed();
-    dprintln!("Optimized algorithm: {:?}", time2);
+    log::debug!("Optimized algorithm: {:?}", time2);
 
     // Parallel SIMD algorithm
     let start = Instant::now();
     let _result3 = resample_parallel_simd(input, src_rate, dst_rate);
     let time3 = start.elapsed();
-    dprintln!("Parallel SIMD algorithm: {:?}", time3);
+    log::debug!("Parallel SIMD algorithm: {:?}", time3);
 
     let speedup2 = time1.as_nanos() as f64 / time2.as_nanos() as f64;
     let speedup3 = time1.as_nanos() as f64 / time3.as_nanos() as f64;
 
-    dprintln!("Optimized speedup: {:.2}x", speedup2);
-    dprintln!("Parallel SIMD speedup: {:.2}x", speedup3);
+    log::debug!("Optimized speedup: {:.2}x", speedup2);
+    log::debug!("Parallel SIMD speedup: {:.2}x", speedup3);
 }

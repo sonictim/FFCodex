@@ -367,7 +367,7 @@ impl Codec for WavCodec {
                     fmt_chunk_found = true;
                     let format_tag = cursor.read_u16::<LittleEndian>()?;
                     channels = cursor.read_u16::<LittleEndian>()?;
-                    dprintln!("Decode Channels: {}", channels);
+                    log::debug!("Decode Channels: {}", channels);
                     sample_rate = cursor.read_u32::<LittleEndian>()?;
                     cursor.read_u32::<LittleEndian>()?; // byte rate
                     cursor.read_u16::<LittleEndian>()?; // block align
@@ -1528,7 +1528,7 @@ fn decode_samples(
         return Err(anyhow!("No audio frames found in data"));
     }
 
-    dprintln!(
+    log::debug!(
         "Decoding {} channels, {} frames per channel, {} bits per sample",
         channels,
         frame_count,
