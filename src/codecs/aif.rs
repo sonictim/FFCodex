@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::codecs::{f32_to_int, int_to_f32};
 
 // Chunk Identifiers
 const FORM_CHUNK_ID: &[u8; 4] = b"FORM";
@@ -21,9 +22,6 @@ const HEADER_SIZE: usize = 12; // FORM + size + AIFF
 const MIN_VALID_FILE_SIZE: usize = 12;
 
 // Sample conversion constants
-const I16_MAX_F: f32 = 32767.0;
-const I24_MAX_F: f32 = 8388607.0;
-const I32_MAX_F: f32 = 2147483647.0;
 const BYTE_MASK: i32 = 0xFF;
 
 pub struct AifCodec;
@@ -167,7 +165,7 @@ impl Codec for AifCodec {
         let mut cursor = Cursor::new(&mapped_file[..]);
         cursor.set_position(HEADER_SIZE as u64);
 
-        let mut sample_rate = 0u16;
+        let mut sample_rate = 0u32;
         let mut channels = 0u16;
         let mut bits_per_sample = 0u16;
         let mut total_frames = 0u32;
@@ -195,7 +193,7 @@ impl Codec for AifCodec {
                     bits_per_sample = cursor.read_u16::<BigEndian>()?;
 
                     // Read the 80-bit IEEE extended sample rate
-                    sample_rate = read_ieee_extended(&mut cursor)? as u16;
+                    sample_rate = read_ieee_extended(&mut cursor)? as u32;
                 }
                 ANNO_CHUNK_ID => {
                     // AIFF annotation chunk contains description
@@ -263,20 +261,7 @@ impl Codec for AifCodec {
             0.0
         };
 
-        let duration = if duration_seconds >= 3600.0 {
-            format!(
-                "{:.0}:{:02.0}:{:02.0}",
-                duration_seconds / 3600.0,
-                (duration_seconds % 3600.0) / 60.0,
-                duration_seconds % 60.0
-            )
-        } else {
-            format!(
-                "{:.0}:{:02.0}",
-                duration_seconds / 60.0,
-                duration_seconds % 60.0
-            )
-        };
+        let duration = crate::codecs::format_duration(duration_seconds);
 
         Ok(FileInfo {
             path: file_path.to_string(),
@@ -444,8 +429,8 @@ impl Codec for AifCodec {
                 }
 
                 _ => {
-                    // Skip unknown chunks safely
-                    cursor.set_position(cursor.position() + chunk_size as u64);
+                    // Skip unknown chunks, including the pad byte after odd-sized chunks
+                    cursor.set_position(cursor.position() + (chunk_size + (chunk_size & 1)) as u64);
                 }
             }
         }
@@ -1296,12 +1281,11 @@ fn decode_samples(
             if sample_idx + bytes_per_sample - 1 < input.len() {
                 let val = match bits_per_sample {
                     8 => {
-                        let sample = input[sample_idx] as i8;
-                        sample as f32 / 128.0
+                        int_to_f32(input[sample_idx] as i8 as i32, 8)
                     }
                     16 => {
                         let sample = i16::from_be_bytes([input[sample_idx], input[sample_idx + 1]]);
-                        sample as f32 / 32768.0
+                        int_to_f32(sample as i32, 16)
                     }
                     24 => {
                         let mut sample = i32::from_be_bytes([
@@ -1313,7 +1297,8 @@ fn decode_samples(
                         if sample & 0x800000 != 0 {
                             sample |= -0x01000000i32;
                         }
-                        sample as u32 as f32 / 8388608.0
+                        // Was `sample as u32 as f32`, which turned negative samples into ~+512.0
+                        int_to_f32(sample, 24)
                     }
                     32 => {
                         let sample = i32::from_be_bytes([
@@ -1322,7 +1307,7 @@ fn decode_samples(
                             input[sample_idx + 2],
                             input[sample_idx + 3],
                         ]);
-                        sample as f32 / 2147483648.0
+                        int_to_f32(sample, 32)
                     }
                     _ => 0.0,
                 };
@@ -1358,15 +1343,15 @@ fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: 
             match bits_per_sample {
                 8 => {
                     // AIFF 8-bit samples are signed
-                    let val = (sample.clamp(-1.0, 1.0) * 127.0) as i8;
+                    let val = f32_to_int(sample, 8) as i8;
                     out.write_i8(val)?;
                 }
                 16 => {
-                    let val = (sample.clamp(-1.0, 1.0) * I16_MAX_F) as i16;
+                    let val = f32_to_int(sample, 16) as i16;
                     out.write_i16::<BigEndian>(val)?;
                 }
                 24 => {
-                    let val = (sample.clamp(-1.0, 1.0) * I24_MAX_F) as i32;
+                    let val = f32_to_int(sample, 24);
                     // For big-endian, we need to write the most significant bytes first
                     let bytes = [
                         ((val >> 16) & BYTE_MASK) as u8,
@@ -1379,7 +1364,7 @@ fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: 
                     if buffer.format == SampleFormat::F32 {
                         out.write_f32::<BigEndian>(sample)?;
                     } else {
-                        let val = (sample.clamp(-1.0, 1.0) * I32_MAX_F) as i32;
+                        let val = f32_to_int(sample, 32);
                         out.write_i32::<BigEndian>(val)?;
                     }
                 }

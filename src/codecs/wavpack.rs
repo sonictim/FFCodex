@@ -8,6 +8,7 @@
 
 use crate::bindings::wavpack_bindings::*;
 use crate::prelude::*;
+use crate::codecs::{f32_to_int, int_to_f32};
 use memmap2::MmapOptions;
 use std::ffi::{CStr, CString};
 use std::io::Cursor;
@@ -186,19 +187,13 @@ impl WavpackDecoder {
 
                 let sample_i32 = interleaved[sample_idx];
                 let sample_f32 = match (bits_per_sample, is_float) {
-                    (8, false) => {
-                        // 8-bit is typically unsigned in WAV, but WavPack may store it as signed
-                        let unsigned_val = (sample_i32 + 128) as u8;
-                        (unsigned_val as f32 / 127.5) - 1.0
-                    }
-                    (16, false) => sample_i32 as f32 / 32768.0,
-                    (24, false) => sample_i32 as f32 / 8388608.0,
-                    (32, false) => sample_i32 as f32 / 2147483648.0,
                     (32, true) => {
                         // 32-bit float samples are stored as the bit pattern in the i32
                         f32::from_bits(sample_i32 as u32)
                     }
-                    _ => sample_i32 as f32 / 32768.0, // Default to 16-bit conversion
+                    // libwavpack hands back signed integers for every depth, including 8-bit
+                    (1..=32, false) => int_to_f32(sample_i32, bits_per_sample as u16),
+                    _ => int_to_f32(sample_i32, 16), // Default to 16-bit conversion
                 };
 
                 output[ch].push(sample_f32);
@@ -256,8 +251,17 @@ impl WavpackEncoder {
         }
 
         if is_float {
-            config.flags |= CONFIG_EXTRA_MODE; // Enable float support
+            // libwavpack marks IEEE float data via float_norm_exp (127 = +/-1.0 full scale)
+            config.float_norm_exp = 127;
         }
+
+        // Standard WAVE speaker masks; other readers (e.g. ffmpeg) reject a zero mask
+        config.channel_mask = match channels {
+            1 => 0x4,                       // front center
+            2 => 0x3,                       // front left | front right
+            n if n <= 18 => (1i32 << n) - 1,
+            _ => 0,
+        };
 
         // Set high quality mode by default
         config.flags |= CONFIG_HIGH_FLAG;
@@ -438,21 +442,15 @@ impl WavpackEncoder {
         let samples_per_channel = buffer.data[0].len();
         let channels = buffer.channels as usize;
         let bits_per_sample = self.config.bits_per_sample;
-        let is_float = (self.config.flags & CONFIG_EXTRA_MODE) != 0;
+        let is_float = self.config.float_norm_exp == 127;
 
         for i in 0..samples_per_channel {
             for ch in 0..channels {
                 let sample_f32 = buffer.data[ch][i];
                 let sample_i32 = match (bits_per_sample, is_float) {
-                    (8, false) => {
-                        let unsigned_val = ((sample_f32 + 1.0) * 127.5) as u8;
-                        (unsigned_val as i8) as i32
-                    }
-                    (16, false) => (sample_f32 * 32768.0) as i32,
-                    (24, false) => (sample_f32 * 8388608.0) as i32,
-                    (32, false) => (sample_f32 * 2147483648.0) as i32,
                     (32, true) => sample_f32.to_bits() as i32,
-                    _ => (sample_f32 * 32768.0) as i32, // Default to 16-bit
+                    (1..=32, false) => f32_to_int(sample_f32, bits_per_sample as u16),
+                    _ => f32_to_int(sample_f32, 16), // Default to 16-bit
                 };
 
                 let output_idx = i * channels + ch;
@@ -554,25 +552,12 @@ impl Codec for WvCodec {
             0.0
         };
 
-        let duration = if duration_seconds >= 3600.0 {
-            format!(
-                "{:.0}:{:02.0}:{:02.0}",
-                duration_seconds / 3600.0,
-                (duration_seconds % 3600.0) / 60.0,
-                duration_seconds % 60.0
-            )
-        } else {
-            format!(
-                "{:.0}:{:02.0}",
-                duration_seconds / 60.0,
-                duration_seconds % 60.0
-            )
-        };
+        let duration = crate::codecs::format_duration(duration_seconds);
 
         Ok(FileInfo {
             path: file_path.to_string(),
             size: file_size,
-            sample_rate: sample_rate as u16,
+            sample_rate: sample_rate as u32,
             channels,
             bit_depth: bit_depth as u16,
             duration,

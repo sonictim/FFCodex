@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::codecs::{f32_to_int, int_to_f32};
 
 // Format tags
 const FORMAT_PCM: u16 = 1;
@@ -22,15 +23,10 @@ const BIT_DEPTH_24: u16 = 24;
 const BIT_DEPTH_32: u16 = 32;
 
 // Sample conversion constants
-const U8_SCALE: f32 = 127.0;
-const U8_OFFSET: f32 = 128.0;
-const I16_MAX_F: f32 = 32767.0;
 // const I16_DIVISOR: f32 = 32768.0;
 const I16_DIVISOR_RECIP: f32 = 1.0 / 32768.0;
-const I24_MAX_F: f32 = 8388607.0;
 // const I24_DIVISOR: f32 = 8388608.0;
 const I24_DIVISOR_RECIP: f32 = 1.0 / 8388608.0;
-const I32_MAX_F: f32 = 2147483647.0;
 // const I32_DIVISOR: f32 = 2147483648.0;
 const I32_DIVISOR_RECIP: f32 = 1.0 / 2147483648.0;
 const I24_SIGN_BIT: i32 = 0x800000;
@@ -324,19 +320,7 @@ impl Codec for WavCodec {
             let bytes_per_second = sample_rate * channels as u32 * bytes_per_sample as u32;
             let duration_seconds = data_size as f64 / bytes_per_second as f64;
 
-            let hours = (duration_seconds / 3600.0) as u32;
-            let minutes = ((duration_seconds % 3600.0) / 60.0) as u32;
-            let seconds = (duration_seconds % 60.0) as u32;
-            let milliseconds = ((duration_seconds % 1.0) * 1000.0) as u32;
-
-            if hours > 0 {
-                format!(
-                    "{}:{:02}:{:02}.{:03}",
-                    hours, minutes, seconds, milliseconds
-                )
-            } else {
-                format!("{}:{:02}.{:03}", minutes, seconds, milliseconds)
-            }
+            crate::codecs::format_duration(duration_seconds)
         } else {
             "Unknown".to_string()
         };
@@ -344,7 +328,7 @@ impl Codec for WavCodec {
         Ok(FileInfo {
             path: file_path.to_string(),
             size: file_size,
-            sample_rate: sample_rate as u16,
+            sample_rate,
             channels,
             bit_depth: bits_per_sample,
             duration,
@@ -1570,8 +1554,8 @@ fn decode_samples(
 
             let val = match bits_per_sample {
                 8 => {
-                    let sample = input[sample_idx] as f32;
-                    (sample - U8_OFFSET) / U8_SCALE
+                    // 8-bit WAV is unsigned with a 128 offset
+                    int_to_f32(input[sample_idx] as i32 - 128, 8)
                 }
                 16 => {
                     let sample =
@@ -1591,13 +1575,17 @@ fn decode_samples(
                     sample as f32 * I24_DIVISOR_RECIP
                 }
                 32 => {
-                    let sample = i32::from_le_bytes([
+                    let bytes = [
                         input[sample_idx],
                         input[sample_idx + 1],
                         input[sample_idx + 2],
                         input[sample_idx + 3],
-                    ]) as f32;
-                    sample * I32_DIVISOR_RECIP
+                    ];
+                    if is_float_format {
+                        f32::from_le_bytes(bytes)
+                    } else {
+                        i32::from_le_bytes(bytes) as f32 * I32_DIVISOR_RECIP
+                    }
                 }
                 _ => 0.0,
             };
@@ -1634,15 +1622,15 @@ fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: 
             let sample = buffer.data[ch][i];
             match bits_per_sample {
                 BIT_DEPTH_8 => {
-                    let val = ((sample * U8_SCALE + U8_OFFSET).clamp(0.0, 255.0)) as u8;
+                    let val = (f32_to_int(sample, 8) + 128) as u8;
                     out.write_u8(val)?;
                 }
                 BIT_DEPTH_16 => {
-                    let val = (sample.clamp(-1.0, 1.0) * I16_MAX_F) as i16;
+                    let val = f32_to_int(sample, 16) as i16;
                     out.write_i16::<LittleEndian>(val)?;
                 }
                 BIT_DEPTH_24 => {
-                    let val = (sample.clamp(-1.0, 1.0) * I24_MAX_F) as i32;
+                    let val = f32_to_int(sample, 24);
                     let bytes = [
                         (val & BYTE_MASK) as u8,
                         ((val >> 8) & BYTE_MASK) as u8,
@@ -1654,7 +1642,7 @@ fn encode_samples<W: Write>(out: &mut W, buffer: &AudioBuffer, bits_per_sample: 
                     if buffer.format == SampleFormat::F32 {
                         out.write_f32::<LittleEndian>(sample)?;
                     } else {
-                        let val = (sample.clamp(-1.0, 1.0) * I32_MAX_F) as i32;
+                        let val = f32_to_int(sample, 32);
                         out.write_i32::<LittleEndian>(val)?;
                     }
                 }

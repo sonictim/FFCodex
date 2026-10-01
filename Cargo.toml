@@ -18,7 +18,7 @@ base64 = "0.22.1"   # Used by chromaprint
 byteorder = "1.5.0"
 claxon = "0.4.3"    # FLAC decoding
 cpal = "0.16.0"
-flacenc = "0.4.0"   # FLAC encoding
+flacenc = "0.5.1"   # FLAC encoding (0.5 fixes padded final block and 24-bit overflow)
 libc = "0.2"        # C memory management for wavpack/chromaprint
 memmap2 = "0.9.5"   # Memory mapped file I/O
 metaflac = "0.2.8"  # FLAC metadata handling
@@ -45,3 +45,6 @@ opt-level = 3     # Maximum optimization
 [profile.bench]
 inherits = "release"
 debug = true         # Keep debug info for profiling
+
+[dev-dependencies]
+tempfile = "3"

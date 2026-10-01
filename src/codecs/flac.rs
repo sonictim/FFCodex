@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::codecs::f32_to_int;
 use claxon::FlacReader;
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
@@ -12,11 +13,8 @@ const VORBIS_COMMENT_BLOCK_TYPE: u8 = 4;
 // Note: PICTURE_BLOCK_TYPE and LAST_METADATA_BLOCK_FLAG removed as unused
 
 // Sample normalization constants
-const I16_MAX_F: f32 = 32767.0;
 const I16_DIVISOR: f32 = 32768.0;
-const I24_MAX_F: f32 = 8388607.0;
 const I24_DIVISOR: f32 = 8388608.0;
-const I32_MAX_F: f32 = 2147483647.0;
 const I32_DIVISOR: f32 = 2147483648.0;
 
 pub struct FlacCodec;
@@ -247,25 +245,12 @@ impl Codec for FlacCodec {
             0.0
         };
 
-        let duration = if duration_seconds >= 3600.0 {
-            format!(
-                "{:.0}:{:02.0}:{:02.0}",
-                duration_seconds / 3600.0,
-                (duration_seconds % 3600.0) / 60.0,
-                duration_seconds % 60.0
-            )
-        } else {
-            format!(
-                "{:.0}:{:02.0}",
-                duration_seconds / 60.0,
-                duration_seconds % 60.0
-            )
-        };
+        let duration = crate::codecs::format_duration(duration_seconds);
 
         Ok(FileInfo {
             path: file_path.to_string(),
             size: file_size,
-            sample_rate: sample_rate as u16,
+            sample_rate: sample_rate as u32,
             channels,
             bit_depth: bits_per_sample,
             duration,
@@ -374,12 +359,8 @@ impl Codec for FlacCodec {
 
         let num_samples = buffer.data[0].len();
 
-        // Pre-calculate conversion factors outside of the loop for better performance
-        let scale_factor = match bits_per_sample {
-            8 => 127.0,
-            16 => I16_MAX_F,
-            24 => I24_MAX_F,
-            32 => I32_MAX_F,
+        let bits = match bits_per_sample {
+            8 | 16 | 24 | 32 => bits_per_sample as u16,
             _ => {
                 return Err(anyhow!(
                     "Unsupported bit depth for FLAC encoding: {}",
@@ -405,7 +386,7 @@ impl Codec for FlacCodec {
                     for i in chunk_indices {
                         for ch in 0..channels {
                             let sample = buffer.data[ch][i];
-                            let val = (sample * scale_factor).round() as i32;
+                            let val = f32_to_int(sample, bits);
                             local_buffer.push(val);
                         }
                     }
@@ -420,7 +401,7 @@ impl Codec for FlacCodec {
             for i in 0..num_samples {
                 for ch in 0..channels {
                     let sample = buffer.data[ch][i];
-                    let val = (sample * scale_factor).round() as i32;
+                    let val = f32_to_int(sample, bits);
                     samples.push(val);
                 }
             }
@@ -468,7 +449,7 @@ impl Codec for FlacCodec {
         let mut metadata = Metadata::new();
 
         // First, try to parse FLAC metadata blocks using metaflac
-        let temp_file = std::env::temp_dir().join("temp_flac_metadata");
+        let temp_file = crate::unique_temp_path(&std::env::temp_dir().join("ffcodex_flac_metadata.flac"));
         std::fs::write(&temp_file, input)?;
 
         if let Ok(tag) = Tag::read_from_path(&temp_file) {

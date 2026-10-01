@@ -11,6 +11,7 @@ mod chromaprint;
 pub mod playback;
 pub mod resample;
 pub mod soundminer;
+pub mod multimono;
 
 // Standard bit depths
 // const BIT_DEPTH_8: u16 = 8;
@@ -49,37 +50,96 @@ macro_rules! dprintln {
         $crate::debug_println(format_args!($($arg)*))
     };
 }
-pub fn clean_multi_mono(path: &str) -> R<()> {
-    let filename = PathBuf::from(path)
-        .file_name()
+/// Returns a temp path that is unique per call and lives next to `target`.
+/// Unique so parallel callers never share a file; same directory so the final
+/// rename stays on one volume (atomic, no cross-drive copy on Windows).
+/// Keeps the target's extension so codec lookup by extension still works.
+pub fn unique_temp_path(target: &std::path::Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let stem = target
+        .file_stem()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    let temp_path = std::env::temp_dir().join(format!("ffcodex_{}", filename));
+    let ext = target
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    let name = format!(".{}.ffcodex-{}-{}{}", stem, std::process::id(), n, ext);
+    match target.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.join(name),
+        _ => std::env::temp_dir().join(name),
+    }
+}
 
-    // Process in chunks to minimize memory usage
-    {
+/// Moves `temp` over `dest`, falling back to copy if rename fails.
+/// The temp file is always removed.
+fn replace_file(temp: &std::path::Path, dest: &std::path::Path) -> R<()> {
+    let result = match std::fs::rename(temp, dest) {
+        Ok(_) => return Ok(()),
+        Err(e) => std::fs::copy(temp, dest).map(|_| ()).map_err(|_| e.into()),
+    };
+    let _ = std::fs::remove_file(temp);
+    result
+}
+
+pub fn clean_multi_mono(path: &str) -> R<()> {
+    let temp_path = unique_temp_path(std::path::Path::new(path));
+    let extension = std::path::Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    // WAV/AIFF: strip at the byte level so audio is bit-exact and every
+    // metadata chunk is preserved untouched
+    if matches!(extension.as_str(), "wav" | "aif" | "aiff") {
+        let result = (|| {
+            let input = std::fs::read(path)?;
+            let output = if extension == "wav" {
+                multimono::strip_wav(&input)?
+            } else {
+                multimono::strip_aiff(&input)?
+            };
+            std::fs::write(&temp_path, output)?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e);
+        }
+        return replace_file(&temp_path, std::path::Path::new(path));
+    }
+
+    // Other formats: decode, verify, drop extra channels, re-encode
+    let result = (|| {
         let mut codex = Codex::open(path)?;
+        if let Some(buffer) = &codex.buffer {
+            let first = &buffer.data[0];
+            for (ch, other) in buffer.data.iter().enumerate().skip(1) {
+                let identical = first.iter().zip(other).all(|(a, b)| {
+                    ((*a as f64) - (*b as f64)).abs() <= multimono::MAX_CHANNEL_DIFF
+                });
+                if !identical {
+                    return Err(anyhow::anyhow!(
+                        "Channels are not identical (channel {}); refusing to strip",
+                        ch + 1
+                    ));
+                }
+            }
+        }
         codex.convert_dual_mono()?;
         let temp_str = temp_path
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("Temp path contains invalid UTF-8"))?;
-        codex.export(temp_str)?;
-    } // All memory freed here
-
-    // Replace original - use same robust logic as export()
-    match std::fs::rename(&temp_path, path) {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            // As a fallback, try to copy then delete (Windows compatibility)
-            if let Err(_copy_err) = std::fs::copy(&temp_path, path) {
-                let _ = std::fs::remove_file(&temp_path); // Cleanup on failure
-                Err(e.into()) // Return the original error
-            } else {
-                let _ = std::fs::remove_file(&temp_path); // Cleanup temp file
-                Ok(())
-            }
-        }
+        codex.export(temp_str)
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(e);
     }
+
+    replace_file(&temp_path, std::path::Path::new(path))
 }
 
 pub fn get_fingerprint(path: &str) -> R<String> {
@@ -131,7 +191,7 @@ pub fn get_basic_metadata(path: &str) -> R<FileInfo> {
 pub struct FileInfo {
     pub path: String,
     pub size: usize,
-    pub sample_rate: u16,
+    pub sample_rate: u32,
     pub channels: u16,
     pub bit_depth: u16,
     pub duration: String,
@@ -294,9 +354,20 @@ impl Codex {
     }
 
     pub fn export(&self, output_file: &str) -> R<()> {
-        let temp_file = std::env::temp_dir().join("temp_audio_file");
-        let temp_path = temp_file.to_str().unwrap_or("");
+        let temp_file = unique_temp_path(std::path::Path::new(output_file));
+        let temp_path = temp_file
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("Temp path contains invalid UTF-8"))?;
 
+        if let Err(e) = self.encode_to(output_file, temp_path) {
+            let _ = std::fs::remove_file(&temp_file);
+            return Err(e);
+        }
+
+        replace_file(&temp_file, std::path::Path::new(output_file))
+    }
+
+    fn encode_to(&self, output_file: &str, temp_path: &str) -> R<()> {
         match get_codec(output_file) {
             Ok(codec) => {
                 // Check if this is a WavPack file and we have metadata - optimize for single encoding
@@ -346,19 +417,7 @@ impl Codex {
             }
             Err(error) => return Err(error),
         }
-
-        match std::fs::rename(&temp_file, output_file) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // As a fallback, try to copy then delete
-                if let Err(_copy_err) = std::fs::copy(&temp_file, output_file) {
-                    Err(e.into()) // Return the original error
-                } else {
-                    let _ = std::fs::remove_file(&temp_file); // Try to cleanup
-                    Ok(())
-                }
-            }
-        }
+        Ok(())
     }
 
     pub fn convert_dual_mono(&mut self) -> R<()> {

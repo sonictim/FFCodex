@@ -30,6 +30,41 @@ pub fn get_codec(file_path: &str) -> R<Box<dyn Codec>> {
     }
 }
 
+/// Full-scale value for `bits`-bit signed PCM: 2^(bits-1).
+/// Decode and encode must use the same power-of-two scale so that
+/// int -> f32 -> int is lossless (exact up to 24 bits; f32 has a 24-bit mantissa).
+#[inline(always)]
+pub fn pcm_scale(bits: u16) -> f32 {
+    (1u64 << (bits - 1)) as f32
+}
+
+#[inline(always)]
+pub fn int_to_f32(sample: i32, bits: u16) -> f32 {
+    sample as f32 / pcm_scale(bits)
+}
+
+/// Rounds to nearest and clamps to the signed range for `bits`.
+#[inline(always)]
+pub fn f32_to_int(sample: f32, bits: u16) -> i32 {
+    let scale = pcm_scale(bits);
+    // For 32-bit, `scale - 1.0` rounds back to 2^31 in f32; the `as i32` cast saturates to i32::MAX
+    (sample * scale).round().clamp(-scale, scale - 1.0) as i32
+}
+
+/// Formats seconds as `M:SS.mmm` or `H:MM:SS.mmm` (truncating, never rounding up to :60).
+pub fn format_duration(duration_seconds: f64) -> String {
+    let total_ms = (duration_seconds.max(0.0) * 1000.0) as u64;
+    let hours = total_ms / 3_600_000;
+    let minutes = (total_ms / 60_000) % 60;
+    let seconds = (total_ms / 1000) % 60;
+    let milliseconds = total_ms % 1000;
+    if hours > 0 {
+        format!("{}:{:02}:{:02}.{:03}", hours, minutes, seconds, milliseconds)
+    } else {
+        format!("{}:{:02}.{:03}", minutes, seconds, milliseconds)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct AudioBuffer {
     pub sample_rate: u32,
